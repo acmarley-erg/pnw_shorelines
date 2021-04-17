@@ -1,0 +1,250 @@
+---
+title: "Econ Mapping"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+# load packages
+library(tidyverse)
+library(sf)
+library(tigris)
+library(ggthemes)
+library(ggspatial)
+library(here)
+library(janitor)
+library(GADMTools)
+library(rmapshaper)
+library(cdlTools)
+library(openintro)
+```
+
+Download and crop Shapefiles
+
+```{r}
+# crop extent
+crop_extent <- c(xmin = -126, ymin = 41, xmax = -115, ymax = 50)
+
+# get counties in the pnw
+pnw_counties_raw <- counties(state = c("Oregon", "Washington"), cb = TRUE)
+
+# get states file
+states <- states(cb = TRUE)
+states_crop <- st_crop(states,  crop_extent)
+states_simp <-ms_simplify(states_crop)
+
+# canada shapefiles
+canada <- gadm_sf_loadCountries("CAN", level = 0)
+canada_sf <- canada$sf
+canada_sf <- st_transform(canada_sf, st_crs(pnw_counties_raw))
+canada_crop <- st_crop(canada_sf,  crop_extent)
+canada_simp <- ms_simplify(canada_crop)
+
+
+```
+
+Download data
+
+```{r, echo = FALSE}
+
+# Property value at risk by county (millions of 2020$)
+prop_val_raw <- read_csv(here("Data/slr_county_property_value.csv")) 
+
+# Ocean economy metrics, 2017 values in 2020$
+ocean_econ <- read_csv(here("Data/ocean_economy.csv"))
+
+```
+
+Clean data and connect with shapefiles
+
+```{r}
+
+#county shapefile cleaning
+pnw_counties <- pnw_counties_raw %>% 
+  select(NAME, STATEFP) %>% 
+  rename(county = NAME) %>% 
+  mutate(state = fips(STATEFP, to = "Abbreviation")) %>% 
+  select(-STATEFP)
+
+## Property value at risk by county (millions of 2020$) ##
+  prop_val <- prop_val_raw %>% 
+    clean_names() %>% 
+    mutate(county = str_remove(county, " County")) %>% 
+    pivot_longer(cols = starts_with("x"), names_to = "slr", values_to = "property_value") %>% 
+    mutate(slr = str_remove(slr, "x")) %>% 
+    mutate(property_value = ifelse(property_value == 0, NA, property_value))
+  
+  prop_val_shp <- st_as_sf(left_join(prop_val, pnw_counties, by = c("county", "state")))
+  
+  # filter to just 6ft
+  prop_val_shp_6 <- prop_val_shp %>% 
+  filter(slr == "6ft")
+  
+## Ocean Economy ##
+  oc_econ <- ocean_econ %>% 
+    clean_names() %>% 
+    mutate(state = state2abbr(state)) %>% 
+    mutate(real_avg_wage = as.numeric(real_avg_wage)) %>% 
+    mutate(employment = ifelse(employment == 0, NA, employment)) %>% 
+    mutate(wages_mm = ifelse(wages_mm == 0, NA, wages_mm))
+  
+  oc_econ_shp <- st_as_sf(left_join(oc_econ, pnw_counties, by = c("county", "state")))
+```
+
+
+Create map
+
+```{r}
+# Base maps for maps
+pacific_ocean_labels <- annotate(geom = "text", 
+                                 x = -125.3, y = 45.2, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45) 
+canada_label <- annotate(geom = "text", 
+                         x = -124.2, y = 48.85, 
+                         label = "CANADA", 
+                         color = "#767171", 
+                         size = 3.4,
+                         angle = 328)
+
+wa_label <- annotate(geom = "text", 
+                         x = -119.5, y = 47, 
+                         label = "WASHINGTON", 
+                         color = "black", 
+                         size = 4.3)
+
+or_label <- annotate(geom = "text", 
+                         x = -119.5, y = 44, 
+                         label = "OREGON", 
+                         color = "black", 
+                         size = 4.3)
+
+
+base_map <- ggplot() +
+  geom_sf(data = canada_simp, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = states_simp, fill = "#e2e2e2") +
+  pacific_ocean_labels +
+  canada_label +
+  wa_label +
+  or_label +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+        legend.key.height=unit(1, "cm"))
+
+
+
+
+```
+
+
+```{r}
+
+econ_map = function(shapefile, fill_group, break_groups, label_groups, legend_title){
+  
+  map <- ggplot() +
+      geom_sf(data = canada_simp, fill = "#e2e2e2", color = "#a3a3a3") +
+      geom_sf(data = states_simp, fill = "#e2e2e2") +
+      geom_sf(data = shapefile, aes(fill = fill_group)) +
+      geom_sf(data = pnw_counties, color = "#a3a3a3", fill = NA) +
+      geom_sf(data = states_simp, color = "black", fill = NA) +
+      coord_sf(xlim = c(-126, -117), ylim = c(41.8, 49.2)) +
+      scale_y_continuous(expand = c(0,0)) +
+      scale_fill_gradient(low = "#ffd8cb", high = "#C00000", na.value = "#a3a3a3",
+                          breaks = break_groups,
+                          labels = label_groups) +
+        pacific_ocean_labels +
+        canada_label +
+        wa_label +
+        or_label +
+        labs(
+          fill = legend_title
+        ) +
+        theme_bw() +
+        theme(panel.background = element_rect(fill = "#e1e9f6"),
+              legend.key.height=unit(1, "cm"),
+              axis.title.x=element_blank(),
+              axis.title.y=element_blank())
+  
+  return(map)
+}
+
+
+```
+
+
+```{r}
+
+econ_map(shapefile = prop_val_shp_6, 
+         fill_group = prop_val_shp_6$property_value, 
+         break_groups = c(1000, 2000, 3000, 4000), 
+         label_groups = paste0("$", c("1,000", "2,000", "3,000", "4,000")), 
+         legend_title = "Property Value \n(millions of 2020$)")
+
+
+```
+
+
+```{r}
+# wages
+econ_map(shapefile = oc_econ_shp, 
+         fill_group = oc_econ_shp$wages_mm, 
+         break_groups = c(500, 1000, 1500, 2000, 2500), 
+         label_groups = paste0("$", c("500", "1,000", "1,500", "2,000", "2,500")), 
+         legend_title = "Total Wages\n(millions of 2020$)")
+
+
+# employees
+econ_map(shapefile = oc_econ_shp, 
+         fill_group = oc_econ_shp$employment, 
+         break_groups = c(10000, 20000, 30000, 40000, 50000), 
+         label_groups = c("10,000", "20,000", "30,000", "40,000", "50,000"), 
+         legend_title = "Employment")
+```
+
+
+```{r}
+
+```
+
+
+
+```{r}
+ggplot(data = world) + 
+  geom_sf(fill= "antiquewhite") + 
+  geom_text(data= world_points,
+            aes(x=X, y=Y, label=name), 
+            color = "darkblue", 
+            fontface = "bold", 
+            check_overlap = FALSE) + 
+  annotate(geom = "text", 
+           x = -90, y = 26, 
+           label = "Gulf of Mexico", 
+           fontface = "italic", 
+           color = "grey22", 
+           size = 6) + 
+  annotation_scale(location = "bl",
+                   width_hint = 0.5) + 
+  annotation_north_arrow(location = "bl", 
+                         which_north = "true", 
+                         pad_x = unit(0.75, "in"), 
+                         pad_y = unit(0.5, "in"), 
+                         style = north_arrow_fancy_orienteering) + 
+  coord_sf(xlim = c(-102.15, -74.12), 
+           ylim = c(7.65, 33.97), 
+           expand = FALSE) + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  ggtitle("Map of the Gulf of Mexico and the Caribbean Sea") +
+  theme(panel.grid.major = element_line(color = gray(.5), 
+                                        linetype = "dashed", 
+                                        size = 0.5), 
+        panel.background = element_rect(fill = "aliceblue"))
+```
+
+

@@ -1,0 +1,576 @@
+---
+title: "Shoreline erosion"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+# load packages
+library(tidyverse)
+library(sf)
+library(tigris)
+library(here)
+library(janitor)
+library(leaflet)
+library(GADMTools)
+library(rmapshaper)
+library(ggmap)
+library(ggrepel)
+library(datapasta)
+```
+
+```{r, include = FALSE}
+### Base map Shapefiles
+# crop extent
+crop_extent <- c(xmin = -126, ymin = 41, xmax = -115, ymax = 50)
+
+# get states file
+states <- states(cb = TRUE)
+states_crop <- st_crop(states,  crop_extent)
+states_simp <- ms_simplify(states_crop)
+
+# canada shapefiles
+canada <- gadm_sf_loadCountries("CAN", level = 0)
+canada_sf <- canada$sf
+canada_crop <- st_crop(canada_sf,  crop_extent)
+canada_simp <- ms_simplify(canada_crop)
+
+```
+
+
+```{r, include = FALSE}
+# read in data
+# WA shoreline
+wa_shoreline <- read_sf(here("Data/WA_shorelines_shp/WA_shorelines.shp")) %>% 
+  clean_names()
+  # filter to just 2002 shoreline
+  wa_shore_2002 <- wa_shoreline %>% 
+    filter(year == 2002)
+
+# Ruggiero et al 2013 long term shoreline change transects 
+  #WA
+  wa_lt_transect <- read_sf(here("Data/WA_transects_LT/WA_transects_LT.shp"))
+  wa_lt_point <- st_centroid(wa_lt_transect) %>% 
+    mutate(state = "WA")
+
+  # OR
+  or_lt_transect <- read_sf(here("Data/OR_transects_LT/OR_transects_LT.shp"))
+  or_lt_point <- st_centroid(or_lt_transect) %>% 
+    mutate(state = "OR")
+  
+# Ruggiero et al 2013 short term shoreline change transects 
+  #WA
+  wa_st_transect <- read_sf(here("Data/WA_transects_ST/WA_transects_ST.shp"))
+  wa_st_point <- st_centroid(wa_st_transect) %>% 
+    mutate(state = "WA")
+
+  # OR
+  or_st_transect <- read_sf(here("Data/OR_transects_ST/OR_transects_ST.shp"))
+  or_st_point <- st_centroid(or_st_transect) %>% 
+    mutate(state = "OR")
+
+# combined PNW long term 
+long_term_change <- rbind(wa_lt_point, or_lt_point)
+
+# combined PNW short term 
+short_term_change <- rbind(wa_st_point, or_st_point)
+
+# PNW littoral cells
+littoral_cells <- read_sf(here("Data/littoral_cells_westcoast_line/littoral_cells_westcoast_line.shp")) %>% 
+  filter(State %in% c("Oregon", "Washington"))
+littoral_cells <- st_transform(littoral_cells, 4326)
+
+```
+
+```{r}
+# clean littoral cell names
+littoral_cells <- littoral_cells %>% 
+  mutate(name_2013 = case_when(
+    str_detect(Cell_Name, "P-1") ~ "Long Beach",
+    str_detect(Cell_Name, "P-4") ~ "Grayland Plains",
+    str_detect(Cell_Name, "GH-3") ~ "North Beach",
+    Cell_Name == "Elk" ~ "Port Orford",
+    Cell_Name == "Rogue" ~ "Gold Beach",
+    Cell_Name == "Ferrello" ~ "Brookings",
+    Cell_Name == "Clatsop" ~ "Clatsop Plains",
+    Cell_Name == "SandLake" ~ "Sand Lake",
+    Cell_Name == "Cannon" ~ "Cannon Beach",
+    str_detect(Cell_Name, "\\d+") ~ "NA",
+    TRUE ~ Cell_Name
+    
+  ))
+
+study_cells <- littoral_cells %>% 
+  filter(name_2013 != "NA") %>% 
+  select(name_2013)
+
+```
+
+
+```{r}
+
+# messy Oregon long term change paste
+oregon_lt_mess <- data.frame(
+              messy = c("Brookings", "107","0.9","29","0.4 ± 0.2",
+                       "28","0","0","-0.5","2.0","Pistol","88","1.9",
+                       "14","0.2 ± 0.5","26","0","0","-0.3","1.4",
+                       "Gold Beach","246","1.9","7","0.4 ± 0.7","40","0","0",
+                       "-0.8","3.4","Nesika","171","0.8","41","0.0 ± 0.1",
+                       "36","0","0","-1.0","0.6","Humbug","95","1.5","16",
+                       "-0.4 ± 0.38","94","2","0","-1.0","0.2",
+                       "Port Orford","195","0.4","24","0.0 ± 0.1","64","0","0",
+                       "-0.6","1.0","Bandon","857","1.1","27","0.0 ± 0.2",
+                       "52","5","0","-1.3","2.2","Coos","1","641","1",
+                       "13","0.5 ± 0.3","26","0","0","-0.9","6.5","Heceta",
+                       "115","0.9","9","-0.4 ± 0.3","97","3","0","-1.1",
+                       "0.3","Newport","622","1.2","27","0.5 ± 0.2","30",
+                       "0","0","-1.1","8","Beverly","146","1.3","7",
+                       "-0.2 ± 0.5","68","0","0","-0.7","0.7","Lincoln","414",
+                       "1.1","4","0.1 ± 0.5","46","1","0","-1.2","2.8",
+                       "Neskowin","260","0.9","6","-0.3 ± 0.5","88","0",
+                       "0","-1.0","0.9","Sand Lake","223","1.7","24",
+                       "-0.1 ± 0.4","57","1","0","-1.6","2.3","Netarts","220",
+                       "1.1","13","-0.5 ± 0.3","80","10","0","-1.1",
+                       "1.3","Rockaway","499","1.6","8","0.3 ± 0.3","40",
+                       "22","0","-2.8","5.1","Cannon Beach","214","1.7","9",
+                       "0.2 ± 0.6","35","0","0","-0.5","3.4",
+                       "Clatsop Plains","554","2.5","5","3.1 ± 1.1","10","10",
+                       "2","-3.6","15.5")
+)
+
+
+oregon_st_mess <- data.frame(
+                           messy  = c("Brookings", "179","0.5","37","-0.05 ± 0.1",
+                                         "58","0","0","-1","2","Pistol",
+                                         "133","0.6","32","0.5 ± 0.1","14",
+                                         "0","0","-0.6","2.2","Gold Beach",
+                                         "270","0.6","40","0.6 ± 0.1","22",
+                                         "10","0","-1.9","2.7","Nesika",
+                                         "205","0.6","13","-0.4 ± 0.2","75",
+                                         "13","0","-2","2","Humbug","128",
+                                         "0.6","36","-0.4 ± 0.1","79","11","0",
+                                         "-1.3","1.7","Port Orford","195",
+                                         "0.6","26","-0.3 ± 0.1","65","24",
+                                         "0","-2.4","2.5","Bandon","920",
+                                         "0.5","40","0.2 ± 0.1","39","6","0",
+                                         "-2","3.4","Coos","1","652","0.5",
+                                         "88","0.03 ± 0.1","54","8","1",
+                                         "-3.9","5.6","Heceta","151","0.6",
+                                         "36","-0.1 ± 0.1","66","1","0",
+                                         "-1.1","1.3","Newport","686","0.6",
+                                         "105","-0.5 ± 0.1","73","33","0",
+                                         "-2.6","6.3","Beverly","146","0.5",
+                                         "14","-1.1 ± 0.1","100","51","0",
+                                         "-2.4","--","Lincoln","423","0.5","38",
+                                         "-0.3 ± 0.1","72","15","0","-2",
+                                         "2.9","Neskowin","261","0.6","36",
+                                         "-1.1 ± 0.1","86","58","0","-3",
+                                         "2.5","Sand Lake","232","0.6","33",
+                                         "-0.5 ± 0.1","63","38","0","-2.2",
+                                         "1.8","Netarts","226","0.5","19",
+                                         "-1.0 ± 0.1","86","69","0","-2.2",
+                                         "1.7","Rockaway","500","0.5","34",
+                                         "0.6 ± 0.1","47","25","3","-4.4",
+                                         "26.5","Cannon Beach","245","0.6","41",
+                                         "-0.5 ± 0.1","75","25","0","-2.4",
+                                         "2.3","Clatsop Plains",
+                                         "561","0.5","20","1.9 ± 0.1","2","0",
+                                         "0","-1.4","9")
+                  )
+  
+  
+wa_lt_mess <- data.frame(
+                       messy = c("Long Beach", "741","1.5","19","4.7 ± 0.3","3","3",
+                                      "2","-18.7","23.2","Grayland Plains",
+                                      "395","1.4","5","1.7 ± 0.6","30","29",
+                                      "23","-56.5","43.1","North Beach",
+                                      "792","1.7","13","4.2 ± 0.5","3","0",
+                                      "0","-1.3","13.1")
+               )
+
+wa_st_mess <- data.frame(
+                          messy = c("Long Beach","810","1.4","9",
+                                      "2.6 ± 0.4","17","8","3","-12.1","10.3",
+                                      "Grayland Plains","428","2.1","4",
+                                      "-1.9 ± 1.1","30","17","16","-28.6","6.6",
+                                      "North Beach","793","1.2","8","4.4 ± 0.4",
+                                      "1","0","0","-0.6","21.8")
+               )
+```
+
+```{r}
+
+# change raw copy-paste into dataframes of rate of change
+clean_report_rates = function(messy_data){
+  
+  littoral_cell_names <- messy_data %>% 
+    mutate(name_2013 = ifelse(str_detect(messy, "[a-z]"), messy, "NA")) %>% 
+    filter(name_2013 != "NA") %>% 
+    select(-messy)
+
+  rate_changes <- messy_data %>% 
+    mutate(av_rate_change = ifelse(str_detect(messy, "±"), messy, "NA")) %>% 
+    filter(av_rate_change != "NA") %>% 
+    select(-messy) 
+  
+  clean_df <- cbind(littoral_cell_names, rate_changes) %>% 
+    mutate(LR = str_extract(av_rate_change, "^.*(?=(±))")) %>% 
+    mutate(error = str_extract(av_rate_change, "(?=(±)).*")) %>% 
+    mutate(error = str_remove(error, "±")) %>% 
+    mutate(error = as.numeric(error)) %>% 
+    mutate(LR = as.numeric(LR))
+  
+  return(clean_df)
+}
+
+# get rates of change for all of the littoral cells
+or_lt_rates <- clean_report_rates(oregon_lt_mess) 
+or_st_rates <- clean_report_rates(oregon_st_mess)
+wa_lt_rates <- clean_report_rates(wa_lt_mess) 
+wa_st_rates <- clean_report_rates(wa_st_mess)
+
+
+# pnw short term change
+pnw_lt <- rbind(or_lt_rates, wa_lt_rates)
+
+# pnw long term chane
+pnw_st <- rbind(or_st_rates, wa_st_rates)
+```
+
+
+```{r, include = FALSE}
+# base map
+base_map <- ggplot() +
+  geom_sf(data = canada_simp, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = states_simp, fill = "#e2e2e2") 
+
+```
+
+
+## Washington Littoral Cells
+
+```{r, echo = FALSE}
+
+# Point Grenville for reference 
+point_grenville <- data.frame(name = "Point Grenville", longitude = -124.28, latitude = 47.3) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+# change names to match 2013 report
+wa_lit_cell <- study_cells %>% 
+  filter(State == "Washington") 
+
+# plot the littoral cells
+base_map +
+  geom_sf(data = wa_lit_cell, size = 2, aes(color = name_2013)) +
+  geom_sf(data = point_grenville,  size = 2, color = "red") +
+  geom_text_repel(data = point_grenville, aes(x = longitude, y = latitude, label = name), nudge_x = 0.7) +
+  labs(
+    color = "WA Columbia River\nLittoral Subcells"
+  ) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(46, 47.5), expand = FALSE) +
+  theme_bw() 
+```
+
+
+## Oregon Littoral Cells
+```{r, echo = FALSE, warning = FALSE}
+
+# change names to match 2013 report
+or_lit_cell <- study_cells %>% 
+  filter(State == "Oregon") 
+
+or_lit_cell_labels <- st_centroid(or_lit_cell)
+or_lit_cell_labels <- or_lit_cell_labels %>% 
+   mutate(lat = unlist(map(or_lit_cell_labels$geometry,1)),
+           long = unlist(map(or_lit_cell_labels$geometry,2)))
+
+base_map +
+  geom_sf(data = or_lit_cell, size = 2, aes(color = name_2013), show.legend = FALSE) +
+  geom_text_repel(data = or_lit_cell_labels, 
+                  aes(x = lat, y = long, label = name_2013), 
+                  min.segment.length = 0, box.padding = 0.5,
+                  nudge_x = ifelse(or_lit_cell_labels$name_2013 == "Clatsop Plains (CRLC)", -1, 0)) +
+  labs(
+    title = "Oregon Littoral Cells"
+  ) +
+  coord_sf(xlim = c(-126, -122), ylim = c(42, 46.5), expand = FALSE) +
+  theme_bw() 
+```
+
+## PNW long term change littoral cells
+
+```{r, echo =}
+
+pnw_long <- st_as_sf(left_join(pnw_lt, study_cells, by = "name_2013"))
+
+limits = c(-1, 1) * max(abs(pnw_long$LR))
+
+base_map +
+  geom_sf(data = pnw_long, size = 2, aes(color = LR)) +
+  scale_colour_distiller(type = "div", limits = limits, palette = "RdYlBu", direction = 1) +
+  coord_sf(xlim = c(-125, -122), ylim = c(42, 47.4), expand = FALSE) +
+  theme_bw() +
+  theme(legend.key.height=unit(1, "cm"))
+
+```
+
+## PNW short term change littoral cells
+
+```{r, echo = FALSE}
+
+pnw_short <- st_as_sf(left_join(pnw_st, study_cells, by = "name_2013"))
+
+limits = c(-1, 1) * max(abs(pnw_short$LR))
+
+base_map +
+  geom_sf(data = pnw_short, size = 2, aes(color = LR)) +
+  scale_colour_distiller(type = "div", limits = limits, palette = "RdYlBu", direction = 1) +
+  coord_sf(xlim = c(-125, -122), ylim = c(42, 47.4), expand = FALSE) +
+  theme_bw() +
+  theme(legend.key.height=unit(1, "cm"))
+
+```
+
+
+# Washington
+
+## Long term change transects
+
+```{r, echo = FALSE, message = FALSE}
+# create shapefiles for more and less than the uncertainty limit
+wa_lt <- wa_lt_point %>% 
+  mutate(error_limit = ifelse(abs(LRR) < LCI90, "less", "greater")) 
+
+wa_lt_greater <- wa_lt %>% filter(error_limit == "greater")
+
+wa_lt_less <- wa_lt %>% filter(error_limit == "less")
+
+# look at distribution of values
+# ggplot(wa_lt_greater, aes(x = LRR)) +
+#   geom_histogram()
+
+# add in bins for graphing
+wa_lt_greater <- wa_lt_greater %>% 
+  mutate(bins = case_when(
+    LRR < -20 ~ "< -20",
+    LRR >= -20 & LRR < -10 ~ "-20 to -10",
+    LRR >= -10 & LRR < -5 ~ "-10 to -5",
+    LRR >= -5 & LRR < 0  ~ "-5 to 0",
+    LRR > 0 & LRR <= 5 ~ "0 to 5",
+    LRR > 5 & LRR <= 10 ~ "5 to 10",
+    LRR > 10 & LRR <= 20 ~ "10 to 20",
+    LRR > 20 ~ "> 20",
+    TRUE ~ "NA"
+  )) %>% 
+  mutate(bins = factor(bins, c("> 20", "10 to 20", "5 to 10", "0 to 5", "-5 to 0", "-10 to -5", "-20 to -10", "< -20")))
+  
+
+# plot
+base_map +
+  geom_sf(data = wa_lt_less, color = "dark grey", size = 2) +
+  geom_sf(data = wa_lt_greater, aes(color = bins, size = bins)) +
+  scale_color_manual(values = c("#4575b4", "#74add1", "#abd9e9", "#e0f3f8", "#fffdbf", "#fdae61", "#f46d43", "#d73027")) +
+  scale_size_manual(values = c(5,4,3,2,2,3,4,5)) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(46, 47.4), expand = FALSE) +
+  theme_bw() +
+  labs(
+    color = "Long Term \nRate of Change",
+    size = "Long Term \nRate of Change"
+  ) +
+  theme(
+        legend.key.height=unit(1, "cm")
+        )
+
+# make a map that layers the bigger dots first
+wa_lt_greater_layering <- wa_lt_greater %>% 
+  mutate(bins = factor(bins, c("> 20",  "< -20", "10 to 20", "-20 to -10", "5 to 10", "-10 to -5", "0 to 5", "-5 to 0")))
+
+base_map +
+  geom_sf(data = wa_lt_less, color = "dark grey", size = 2) +
+  geom_sf(data = wa_lt_greater_layering, aes(color = bins, size = bins)) +
+  scale_color_manual(values = c("#4575b4", "#d73027", "#74add1", "#f46d43", "#abd9e9", "#fdae61", "#e0f3f8", "#fffdbf")) +
+  scale_size_manual(values = c(5,5,4,4,3,3,2,2)) +
+  coord_sf(xlim = c(-124.5, -123.5), ylim = c(46, 47.4), expand = FALSE) +
+  theme_bw() +
+  labs(
+    color = "Long Term \nRate of Change",
+    size = "Long Term \nRate of Change"
+  ) +
+  theme(
+        legend.key.height=unit(1, "cm")
+        )
+
+
+```
+
+## Short term change
+
+```{r, echo = FALSE, message = FALSE}
+# create shapefiles for more and less than the uncertainty limit
+wa_st <- wa_st_point %>% 
+  mutate(error_limit = ifelse(abs(EPR) < ECI, "less", "greater")) 
+
+wa_st_greater <- wa_st %>% filter(error_limit == "greater")
+
+wa_st_less <- wa_st %>% filter(error_limit == "less")
+
+# look at distribution of values
+# ggplot(wa_st_greater, aes(x = EPR)) +
+#   geom_histogram()
+
+# add in bins for graphing
+wa_st_greater <- wa_st_greater %>% 
+ mutate(bins = case_when(
+    EPR < -20 ~ "< -20",
+    EPR >= -20 & EPR < -10 ~ "-20 to -10",
+    EPR >= -10 & EPR < -5 ~ "-10 to -5",
+    EPR >= -5 & EPR < 0  ~ "-5 to 0",
+    EPR > 0 & EPR <= 5 ~ "0 to 5",
+    EPR > 5 & EPR <= 10 ~ "5 to 10",
+    EPR > 10 & EPR <= 20 ~ "10 to 20",
+    EPR > 20 ~ "> 20",
+    TRUE ~ "NA"
+  )) %>% 
+  mutate(bins = factor(bins, c("> 20", "10 to 20", "5 to 10", "0 to 5", "-5 to 0", "-10 to -5", "-20 to -10", "< -20")))
+  
+# plot
+base_map +
+  geom_sf(data = wa_st_less, color = "dark grey", size = 2) +
+  geom_sf(data = wa_st_greater, aes(color = bins, size = bins)) +
+  scale_color_manual(values = c("#4575b4", "#74add1", "#abd9e9", "#e0f3f8", "#fffdbf", "#fdae61", "#f46d43", "#d73027")) +
+  scale_size_manual(values = c(5,4,3,2,2,3,4,5)) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(46, 47.4), expand = FALSE) +
+  theme_bw() +
+  labs(
+    color = "Short Term \nRate of Change",
+    size = "Short Term \nRate of Change"
+  ) +
+  theme(
+        legend.key.height=unit(1, "cm")
+        )
+
+# make a map that layers the bigger dots first
+wa_st_greater_layering <- wa_st_greater %>% 
+  mutate(bins = factor(bins, c("> 20",  "< -20", "10 to 20", "-20 to -10", "5 to 10", "-10 to -5", "0 to 5", "-5 to 0")))
+
+base_map +
+  geom_sf(data = wa_st_less, color = "dark grey", size = 2) +
+  geom_sf(data = wa_st_greater_layering, aes(color = bins, size = bins)) +
+  scale_color_manual(values = c("#4575b4", "#d73027", "#74add1", "#f46d43", "#abd9e9", "#fdae61", "#e0f3f8", "#fffdbf")) +
+  scale_size_manual(values = c(5,5,4,4,3,3,2,2)) +
+  coord_sf(xlim = c(-124.5, -123.5), ylim = c(46, 47.4), expand = FALSE) +
+  theme_bw() +
+  labs(
+    color = "Short Term \nRate of Change",
+    size = "Short Term \nRate of Change"
+  ) +
+  theme(
+        legend.key.height=unit(1, "cm")
+        )
+
+```
+
+
+# Oregon
+
+## Long term change
+
+```{r, echo = FALSE, message = FALSE}
+# create shapefiles for more and less than the uncertainty limit
+or_lt <- or_lt_point %>% 
+  mutate(error_limit = ifelse(abs(LRR) < LCI90, "less", "greater")) 
+
+or_lt_greater <- or_lt %>% filter(error_limit == "greater")
+
+or_lt_less <- or_lt %>% filter(error_limit == "less")
+
+# look at distribution of values
+# ggplot(or_lt_greater, aes(x = LRR)) +
+#   geom_histogram()
+
+# add in bins for graphing
+or_lt_greater <- or_lt_greater %>% 
+  mutate(bins = case_when(
+    LRR < -3 ~ "< -3",
+    LRR >= -3 & LRR < 0  ~ "-3 to 0",
+    LRR > 0 & LRR <= 3 ~ "0 to 3",
+    LRR > 3 & LRR <= 5 ~ "3 to 5",
+    LRR > 5 & LRR <= 10 ~ "5 to 10",
+    LRR > 10 & LRR <= 15 ~ "10 to 15",
+    LRR > 15 ~ "> 15",
+    TRUE ~ "NA"
+  )) %>% 
+  mutate(bins = factor(bins, c("> 15", "10 to 15","5 to 10","3 to 5", "0 to 3", "-3 to 0", "< -3")))
+  
+# plot
+base_map +
+  geom_sf(data = or_lt_less, color = "dark grey", size = 2) +
+  geom_sf(data = or_lt_greater, aes(color = bins, size = bins)) +
+  scale_color_manual(values = c("#323695", "#4575b4", "#74add1", "#abd9e9", "#e0f3f8", "#fffdbf")) +
+  scale_size_manual(values = c(5,4,3,2,2,3,4)) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.5), expand = FALSE) +
+  theme_bw() +
+  labs(
+    color = "Long Term \nRate of Change",
+    size = "Long Term \nRate of Change"
+  ) +
+  theme(
+        legend.key.height=unit(1, "cm")
+        )
+
+
+```
+
+## Short term change
+
+```{r, echo = FALSE, message = FALSE}
+# create shapefiles for more and less than the uncertainty limit
+or_st <- or_st_point %>% 
+  mutate(error_limit = ifelse(abs(EPR) < ECI, "less", "greater")) 
+
+or_st_greater <- or_st %>% filter(error_limit == "greater")
+
+or_st_less <- or_st %>% filter(error_limit == "less")
+
+# look at distribution of values
+# ggplot(or_st_greater, aes(x = EPR)) +
+#   geom_histogram()
+
+# add in bins for graphing
+or_st_greater <- or_st_greater %>% 
+  mutate(bins = case_when(
+    EPR < -3 ~ "< -3",
+    EPR >= -3 & EPR < 0  ~ "-3 to 0",
+    EPR > 0 & EPR <= 3 ~ "0 to 3",
+    EPR > 3 & EPR <= 5 ~ "3 to 5",
+    EPR > 5 & EPR <= 10 ~ "5 to 10",
+    EPR > 10 & EPR <= 15 ~ "10 to 15",
+    EPR > 15 & EPR <= 20 ~ "15 to 20",
+    EPR > 20 ~ "> 20",
+    TRUE ~ "NA"
+  )) %>% 
+  mutate(bins = factor(bins, c("> 20", "15 to 20", "10 to 15","5 to 10","3 to 5", "0 to 3", "-3 to 0", "< -3")))
+  
+# plot
+base_map +
+  geom_sf(data = or_st_less, color = "dark grey", size = 2) +
+  geom_sf(data = or_st_greater, aes(color = bins, size = bins)) +
+  scale_color_manual(values = c("#004c6d", "#346888", "#5886a5", "#7aa6c2", "#9dc6e0", "#c1e7ff", "#fffdbf", "#fee090")) +
+  scale_size_manual(values = c(7,6,5,4,3,2,2,3)) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.5), expand = FALSE) +
+  theme_bw() +
+  labs(
+    color = "Short Term \nRate of Change",
+    size = "Short Term \nRate of Change"
+  ) +
+  theme(
+        legend.key.height=unit(1, "cm")
+        )
+
+
+```
+
+
