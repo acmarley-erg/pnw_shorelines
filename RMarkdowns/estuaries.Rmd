@@ -1,0 +1,291 @@
+---
+title: "Estuaries"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(sf)
+library(here)
+library(tigris)
+library(GADMTools)
+library(rmapshaper)
+library(ggspatial)
+library(ggrepel)
+```
+
+```{r}
+## read in data
+
+# west coast estuaries
+west_estuaries <- st_read(dsn = here("Data/estuary_locs.gdb"), layer = "PMEP_Estuary_Points_V1_3")
+
+west_tidal_loss <- st_read(here("Data/PMEP_Tidal_Wetland_Loss_V1.gdb"), layer = "PMEP_Tidal_Wetland_Loss_V1")
+
+west_tidal_extent <- st_read(here("Data/PMEP_West_Coast_USA_Estuary_Extent_V1.gdb"), layer = "PMEP_West_Coast_USA_Estuary_Extent_V1")
+
+# crop extent
+crop_extent <- c(xmin = -126, ymin = 41, xmax = -115, ymax = 50)
+
+# get states file
+states <- states(cb = TRUE)
+
+# canada shapefiles
+canada <- gadm_sf_loadCountries("CAN", level = 0)
+
+```
+
+```{r}
+# clean shapefiles
+
+# states
+pnw_states <- states %>% 
+  filter(NAME %in% c("Washington", "Oregon"))
+states_crop <- st_crop(states, crop_extent)
+states_simp <-ms_simplify(states_crop)
+
+# canada
+canada_sf <- canada$sf
+canada_sf <- st_transform(canada_sf, st_crs(states_simp))
+canada_crop <- st_crop(canada_sf,  crop_extent)
+canada_simp <- ms_simplify(canada_crop)
+
+# make estuaries just PNW outer coast
+pnw_estuaries <- west_estuaries %>%
+  st_zm() %>% 
+  filter(PMEP_Region == "Washington, Oregon, Northern California Coast") %>% 
+  st_transform(4269) %>% 
+  st_crop(pnw_states) %>% 
+  mutate(Estuary_Name = ifelse(Estuary_Name == "Columbia River - Reach A", "Columbia River", Estuary_Name)) %>% 
+  filter(!str_detect(Estuary_Name, "Reach"))
+
+ggplot() +
+  geom_sf(data = states_simp, fill = "grey") +
+  geom_sf(data = pnw_estuaries, aes(color = Estuary_Name), show.legend = FALSE) +
+  coord_sf(xlim = c(-125, -123), ylim = c(41.8, 46), expand = FALSE)
+
+# pull out the coordinates
+pnw_estuaries <- pnw_estuaries %>% 
+  mutate(lat = sf::st_coordinates(.)[,1],
+         lon = sf::st_coordinates(.)[,2])
+
+# take out the smaller creek estuaries
+pnw_estuaries_slim <- pnw_estuaries %>% 
+  filter(!str_detect(Estuary_Name, "Creek"))
+
+
+# tidal wetland loss
+pnw_tidal_total <- west_tidal_loss %>% 
+  st_zm() %>% 
+  filter(PMEP_Region == "Washington, Oregon, Northern California Coast") %>% 
+  filter(TWL_Type != "N/A") %>% 
+  select(PMEP_EstuaryID, Estuary_Name, TWL_Type, TWL_Hectares) %>%
+  group_by(Estuary_Name) %>% 
+  mutate(total_ha = sum(TWL_Hectares)) %>% 
+  mutate(percent = round((TWL_Hectares/total_ha)*100, 2)) 
+
+pnw_tidal_loss <- pnw_tidal_total %>% 
+  filter(TWL_Type == "lost") %>% 
+  st_drop_geometry()
+
+pnw_total_loss_pnts <- left_join(pnw_estuaries, pnw_tidal_loss, by = "PMEP_EstuaryID") %>% 
+  select(PMEP_EstuaryID, Estuary_Name.x, CMECS_Class, TWL_Type, TWL_Hectares, total_ha, percent, lat, lon) %>% 
+  filter(!is.na(percent)) %>% 
+  rename(Estuary_Name = Estuary_Name.x)
+
+total_pnw <- pnw_total_loss_pnts %>% 
+  st_drop_geometry() %>% 
+  ungroup() %>% 
+  summarize(
+    total_ha = sum(total_ha),
+    loss_ha = sum(TWL_Hectares)
+  ) %>% 
+  mutate(percent = loss_ha/total_ha)
+
+# salish sea wetland loss
+salish_tidal_total <- west_tidal_loss %>% 
+  st_zm() %>% 
+  filter(PMEP_Region == "Salish Sea") %>% 
+  filter(TWL_Type != "N/A") %>% 
+  select(PMEP_EstuaryID,PMEP_Region, Estuary_Name, TWL_Type, TWL_Hectares) %>%
+  group_by(Estuary_Name) %>% 
+  mutate(total_ha = sum(TWL_Hectares)) %>% 
+  mutate(percent = round((TWL_Hectares/total_ha)*100, 2)) 
+
+salish_tidal_loss <- salish_tidal_total %>% 
+  filter(TWL_Type == "lost") %>% 
+  st_drop_geometry()
+
+salish_estuaries <- west_estuaries %>%
+  st_zm() %>% 
+  filter(PMEP_Region == "Salish Sea") %>% 
+  st_transform(4269) %>% 
+  st_crop(pnw_states)
+
+# pull out the coordinates
+salish_estuaries <- salish_estuaries %>% 
+  mutate(lat = sf::st_coordinates(.)[,1],
+         lon = sf::st_coordinates(.)[,2])
+
+salish_total_loss_pnts <- left_join(salish_estuaries, salish_tidal_loss, by = "PMEP_EstuaryID") %>% 
+  select(PMEP_EstuaryID, Estuary_Name.x, CMECS_Class, TWL_Type, TWL_Hectares, total_ha, percent, lat, lon) %>% 
+  filter(!is.na(percent)) %>% 
+  rename(Estuary_Name = Estuary_Name.x)
+
+total_salish <- salish_total_loss_pnts %>% 
+  st_drop_geometry() %>% 
+  ungroup() %>% 
+  summarize(
+    total_ha = sum(total_ha),
+    loss_ha = sum(TWL_Hectares)
+  ) %>% 
+  mutate(percent = loss_ha/total_ha)
+
+```
+
+```{r}
+# check number of oregon estuaries
+or_state <- states_simp %>%  filter(NAME == "Oregon")
+
+or_estuaries <- st_crop(pnw_estuaries, or_state) %>% 
+  filter(!str_detect(Link, "Columbia River"))
+```
+
+
+# MApping
+
+```{r}
+# Base maps for maps
+pacific_ocean_labels <- annotate(geom = "text", 
+                                 x = -126, y = 45.2, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45) 
+canada_label <- annotate(geom = "text", 
+                         x = -124.2, y = 48.85, 
+                         label = "CANADA", 
+                         color = "#767171", 
+                         size = 3.4,
+                         angle = 328)
+
+wa_label <- annotate(geom = "text", 
+                         x = -122, y = 47, 
+                         label = "WA", 
+                         color = "black", 
+                         size = 5)
+
+or_label <- annotate(geom = "text", 
+                         x = -122, y = 44, 
+                         label = "OR", 
+                         color = "black", 
+                         size = 5)
+
+
+base_map <- ggplot() +
+  geom_sf(data = canada_simp, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = states_crop, fill = "#e2e2e2") +
+  pacific_ocean_labels +
+  canada_label +
+  wa_label +
+  or_label +
+  theme_bw() +
+  annotation_scale(location = "br", aes(unit_category = "imperial"))
+
+
+base_map
+
+```
+
+
+```{r}
+# estuaries colored by type
+
+base_map +
+  geom_sf(data = pnw_estuaries_slim, aes(color = CMECS_Class), size = 3) +
+  scale_color_manual(values = c("#FFD300", "#C00000", "#4472c4")) +
+  coord_sf(xlim = c(-127, -120.5), ylim = c(41.8, 49.2), expand = FALSE) +
+  labs(
+    color = "Estuary Class:"
+  ) +
+  geom_text_repel(data = pnw_estuaries_slim, aes(x = lat, y = lon, label = Estuary_Name), 
+                  min.segment.length = 0, box.padding = 0.5,
+                  nudge_x = ifelse(pnw_estuaries_slim$Estuary_Name %in% c("Clatsop Spit", "Willapa Bay"), -.5, 0),
+                  max.overlaps = 50) +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+          legend.key.height=unit(1, "cm"),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+        legend.position="bottom",
+        legend.title=element_text(size=13), 
+        legend.text=element_text(size=12)) 
+
+```
+
+```{r}
+# % tidal wetland lost
+
+base_map +
+  geom_sf(data = pnw_total_loss_pnts, aes(color = percent), size = 4) +
+  geom_text_repel(data = pnw_total_loss_pnts, aes(x = lat, y = lon, label = Estuary_Name), 
+                  min.segment.length = 0, box.padding = 0.5,
+                  nudge_x = ifelse(pnw_total_loss_pnts$Estuary_Name %in% c("Grays Harbor", "Willapa Bay", "Alsea Bay"), -.5, 0)) +
+  coord_sf(xlim = c(-127, -120.5), ylim = c(41.8, 49.2), expand = FALSE) +
+  scale_color_gradient(low = "#FFD300", high = "#C00000",
+                       limits = c(0,100),
+                       breaks = c(0, 25, 50, 75, 100),
+                       labels = c("0", "25", "50", "75", "100")) +
+  labs(
+    color = "Area Lost (%): "
+  ) +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+          legend.key.height=unit(1, "cm"),
+        legend.key.width=unit(1, "cm"),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+        legend.position="bottom",
+        legend.title=element_text(size=13), 
+        legend.text=element_text(size=12)) 
+
+
+```
+
+```{r}
+# salsih sea wetland loss
+
+base_map +
+  geom_sf(data = salish_total_loss_pnts, aes(color = percent), size = 4) +
+  geom_text_repel(data = salish_total_loss_pnts, aes(x = lat, y = lon, label = Estuary_Name), 
+                  min.segment.length = 0, box.padding = 1,
+                  nudge_x = ifelse(salish_total_loss_pnts$Estuary_Name %in% c("Deer Lagoon / Useless Bay", "Padilla Bay", 
+                                                                           "Nisqually River", "Stillaguamish River", "Snohomish River"), 0.5, 0),
+                  nudge_y = ifelse(salish_total_loss_pnts$Estuary_Name %in% c("Dugualla Bay"), -0.02, 0)) +
+  coord_sf(xlim = c(-125, -120.5), ylim = c(47.05, 49.2), expand = FALSE) +
+  scale_color_gradient(low = "#FFD300", high = "#C00000",
+                       limits = c(0,100),
+                       breaks = c(0, 25, 50, 75, 100),
+                       labels = c("0", "25", "50", "75", "100")) +
+  labs(
+    color = "Area Lost (%): "
+  ) +
+  annotate(geom = "text", 
+                         x = -121, y = 47.5, 
+                         label = "WA", 
+                         color = "black", 
+                         size = 6) +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+          legend.key.height=unit(1, "cm"),
+        legend.key.width=unit(1, "cm"),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+        legend.position="bottom",
+        legend.title=element_text(size=13), 
+        legend.text=element_text(size=12)) 
+
+
+```

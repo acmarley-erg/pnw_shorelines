@@ -1,0 +1,88 @@
+---
+title: "Shoreline sections"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sf)
+library(tigris)
+library(tidyverse)
+library(GADMTools)
+library(ggrepel)
+library(rnaturalearth)
+library(ggspatial)
+library(RColorBrewer)
+library(here)
+library(janitor)
+```
+
+
+```{r}
+# wa shoreline
+wa_shoreline <- read_sf(here("Data/WA_shorelines_shp/WA_shorelines.shp")) %>% 
+  clean_names() %>% 
+  st_zm()
+
+wa_shore_buffer <- st_buffer(wa_shoreline, 0.02)
+
+#oregon shoreline
+or_shoreline <- read_sf(here("Data/OR_shorelines/OR_shorelines.shp")) %>% 
+  clean_names() %>% 
+  st_zm()
+
+or_shore_buffer <- st_buffer(or_shoreline, 0.02)
+
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = canada_crop, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = pnw_states, fill = "#e2e2e2") +
+  geom_sf(data = wa_shore_buffer, fill = "#C00000", color = "#C00000") +
+  coord_sf(xlim = c(-125.5, -122), ylim = c(46, 48.5), expand = FALSE) +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  annotate(geom = "text", 
+                                 x = -125, y = 47, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45) +
+  annotate(geom = "text", 
+                         x = -123, y = 47, 
+                         label = "WA", 
+                         color = "black", 
+                         size = 5) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+        axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = pnw_states, fill = "#e2e2e2") +
+  geom_sf(data = or_shore_buffer, fill = "#C00000", color = "#C00000") +
+  coord_sf(xlim = c(-126, -122), ylim = c(42, 46.5), expand = FALSE) +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  annotate(geom = "text", 
+                                 x = -125, y = 44, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45) +
+  annotate(geom = "text", 
+                         x = -123, y = 44, 
+                         label = "OR", 
+                         color = "black", 
+                         size = 5) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+        axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+```

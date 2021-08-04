@@ -1,0 +1,750 @@
+---
+title: "Shoreline Type"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(sf)
+library(GADMTools)
+library(tigris)
+library(ggspatial)
+library(here)
+library(janitor)
+library(RColorBrewer)
+library(rmapshaper)
+library(ggrepel)
+```
+
+Shoreline type for washignton and oregon
+
+WA data: https://data-wadnr.opendata.arcgis.com/datasets/shorezone-inventory-shoreline-type?geometry=-132.132%2C46.339%2C-114.796%2C48.929
+
+OR data: https://www.oregonshorezone.info/data.html
+
+
+```{r}
+# base map shapefiles
+# crop extent
+crop_extent <- c(xmin = -126, ymin = 41, xmax = -115, ymax = 50)
+
+# get states file
+states <- states(cb = TRUE)
+states_crop <- st_crop(states,crop_extent)
+
+# separate if necessary
+wa_state <- states %>% filter(NAME == "Washington")
+or_stat <- states %>% filter(NAME == "Oregon")
+pnw_states <- states %>% 
+  filter(NAME %in% c("Washington", "Oregon"))
+
+
+# canada shapefiles
+canada <- gadm_sf_loadCountries("CAN", level = 0)
+canada_sf <- canada$sf
+canada_crop <- st_crop(canada_sf,  crop_extent)
+```
+
+```{r}
+# places
+# Point Grenville 
+point_grenville <- data.frame(name = "Point Grenville", longitude = -124.28, latitude = 47.3) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+# Cape Shoalwater
+cape_shoalwater <- data.frame(name = "Cape Shoalwater", longitude = -124.09, latitude = 46.75) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+# Ledbetter Point
+ledbetter_point <- data.frame(name = "Ledbetter Point", longitude = -124.06, latitude = 46.66) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+
+# WA cities
+
+salish_places <- data.frame(name = c("Seattle", "Tacoma", "Port Angeles", "Bellingham", "Quinault", "Makah"),
+                        longitude = c(47.609, 47.252, 48.117, 48.759, 47.407, 48.335),
+                        latitude = c(-122.318, -122.440, -123.425, -122.431, -124.188, -124.619)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+
+salish_places <- data.frame(name = c("Seattle", "Tacoma", "Port Angeles", "Bellingham", "Point Grenville", "Neah Bay"),
+                        longitude = c(47.609, 47.252, 48.117, 48.759, 47.3, 48.3683),
+                        latitude = c(-122.318, -122.440, -123.425, -122.431, -124.28, -124.6227)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+
+wa_outer_places <- data.frame(name = c("Port Angeles", "La Push", "Point Grenville", "Neah Bay"),
+                        longitude = c( 48.117, 47.9088, 47.3, 48.3683),
+                        latitude = c( -123.425, -124.6354,  -124.28, -124.6227)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+
+wa_inlets <-  data.frame(name = c("Grays Harbor", "Willapa Bay", "Columbia River"), 
+                        longitude = c(46.95, 46.6, 46.2499), latitude = c(-124, -123.947,  -123.74886)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+
+# oregon coastal cities
+
+or_coast_towns <- data.frame(name = c("Coos Bay", "Brookings", "Tillamook", "Newport"), 
+                        longitude = c(43.41, 42.13, 45.46, 44.66), latitude = c(-124.2, -124.23, -123.85, -124.08)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+```
+
+
+```{r}
+### shore type shoreline data ##
+
+# WA
+wa_shoretype <- st_read("https://opendata.arcgis.com/datasets/36fc7f33340c4d9ca5497d2ab8e2984a_51.geojson")
+
+# Puget Sound
+puget_sound_shoretype <- read_sf(here("Data/puget_sound_shorezone/puget_sound_shorezone.shp"))
+
+# Oregon
+or_shp <- read_sf(here("Data/OR_shoretype/oregon_shore_units.shp"))
+or_units <- read_csv(here("Data/OR_shoretype/Unit.csv"))
+or_shr_des <- read_csv(here("Data/OR_shoretype/def_LookupShoreType.csv")) %>% 
+  rename(SHORE_TYPE = Shore_Type)
+
+or_shoretype <- left_join(or_shp, or_units, by = "PHY_IDENT") %>% 
+  left_join(or_shr_des, by = "SHORE_TYPE") %>% 
+  select(SHORE_TYPE, Shore_Type_Name)
+
+# pnw estuaries shapefile
+estuaries <- st_read(here("Data/PMEP_West_Coast_USA_Estuary_Extent_V1.gdb"), layer = "PMEP_West_Coast_USA_Estuary_Extent_V1") 
+
+pnw_estuaries <- estuaries %>% 
+  st_zm() %>% 
+  filter(PMEP_Region == "Washington, Oregon, Northern California Coast") %>% 
+  st_transform(st_crs(pnw_states)) 
+```
+
+
+
+```{r}
+# outer coasts shorelines
+# wa shoreline
+wa_shoreline <- read_sf(here("Data/WA_shorelines_shp/WA_shorelines.shp")) %>% 
+  clean_names() %>% 
+  st_zm()
+
+wa_shore_buffer <- st_buffer(wa_shoreline, 0.01)
+
+# Puget sound shorelien
+puget_sound_shore <- st_read(dsn = here("Data/SEA_GEO_LandformsFeederBluffs.gdb"), layer = "SEA_GEO_LandformsFeederBluffs")
+puget_sound_shore_connect <- st_as_sf(puget_sound_shore) %>% 
+  summarize(Shape = st_union(Shape))
+
+
+#oregon shoreline
+or_shoreline <- read_sf(here("Data/OR_shorelines/OR_shorelines.shp")) %>% 
+  clean_names() %>% 
+  st_zm()
+
+or_shore_buffer <- st_buffer(or_shoreline, 0.01)
+
+```
+
+
+```{r}
+# base map
+
+# base map
+base_map <- ggplot() +
+  geom_sf(data = canada_crop, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = states_crop, fill = "#e2e2e2") +
+   annotate(geom = "text", 
+                         x = -122, y = 46.6, 
+                         label = "WASHINGTON", 
+                         color = "black", 
+                         size = 4.3) +
+  annotate(geom = "text", 
+                         x = -122, y = 44, 
+                         label = "OREGON", 
+                         color = "black", 
+                         size = 4.3) +
+  annotate(geom = "text", 
+                         x = -124.2, y = 48.85, 
+                         label = "CANADA", 
+                         color = "#767171", 
+                         size = 3.4,
+                         angle = 328) +
+  annotate(geom = "text", 
+                                 x = -124, y = 48.32, 
+                                 label = "SALISH SEA", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+           angle = -15) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+```
+
+# test basemaps with place names
+```{r}
+# oregon
+
+base_map
+
+
+# outer coast WA
+
+# Salish sea
+
+```
+
+
+
+# color palettes
+
+```{r}
+
+# color palette
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+```{r}
+
+gravel_flat <- "#B3E1CD"
+
+
+rock_gravel_beach <- "#386CAF"
+rock_sand_gravel_beach <- "#BDB9DA"
+rock_sand_beach <- "#F781BE"
+sand_gravel_beach <- "#EF027E"
+sand_gravel_flat <- "#FFFF33"
+sand_beach <- "#E6AB02"
+sand_flat <- "#E6AB02"
+
+# New
+sand_beach <- "#E6AB02"
+channel <- "#FCCDAC"
+estuary <- "#1B9E77"
+mixed_grain <- "#4472c4"
+bluff_cliff <- "#C00000"  #"#BF5B17"
+man_made <-  "#666666"
+mud_flat <- "#A6761D"
+gravel_beach <- "#E7298A"
+
+
+
+```
+
+```{r}
+
+plot_percent_cover = function(shp, color_pal, upp_lim = 100) {
+  
+# calculate total length of shape  
+  shp_length <- shp %>% 
+  summarize(geometry = st_union(geometry)) %>% 
+  st_length()
+
+# calculate percent of shoreline of each type
+shp_percent <- shp %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  group_by(simple_name) %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(percent_shore = as.numeric((length/shp_length)*100)) %>% 
+  mutate(simple_name = fct_reorder(simple_name, percent_shore))
+
+# plot
+final_plot <- ggplot(shp_percent, aes(x = simple_name, y = percent_shore)) +
+  geom_col(aes(fill = simple_name), show.legend = FALSE) +
+  scale_fill_manual(values = color_pal) +
+  coord_flip() +
+  labs(
+    x = "Shoreline Type",
+    y = "Percent of Shoreline"
+  ) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,upp_lim)) +
+  scale_x_discrete(expand = c(0,0)) +
+  theme_bw() +
+  theme(plot.margin = margin(t = 10, r = 10, b = 10, l = 10),
+        axis.text = element_text(color = "black", size = 11),
+        axis.title = element_text(color = "black", size = 12))
+  
+return(final_plot)
+}
+
+
+```
+
+
+# washington state
+
+```{r}
+# combining outer coast shoreline buffer into one polygon for cropping
+wa_shore_union <- wa_shore_buffer %>% 
+  summarize(geometry = st_union(geometry))
+
+# simplify shoretype categories
+wa_shore_simp <- wa_shoretype %>% 
+  dplyr::mutate(simple_name = case_when(
+    REP_NAME == "Sand and gravel beach" ~ "Mixed grain size beach",
+    REP_NAME == "Sand and gravel flat" ~ "Mixed grain size beach",
+    REP_NAME == "Rock with sand and gravel beach" ~ "Mixed grain size beach",
+    REP_NAME == "Rock with gravel beach" ~ "Mixed grain size beach",
+    REP_NAME == "Rock with sand beach" ~ "Mixed grain size beach",
+    REP_NAME == "Sand flat" ~ "Sand beach",
+    REP_NAME == "Gravel flat" ~ "Sand beach",
+    REP_NAME == "Rock cliff" ~ "Bluff/cliff",
+    REP_NAME == "Rock platform" ~ "Bluff/cliff",
+    REP_NAME == "Man-made" ~ "Human influenced",
+    TRUE ~ as.character(REP_NAME)
+  )) 
+
+
+base_map +
+  geom_sf(data = wa_shore_simp, aes(color = simple_name, fill = simple_name), size = 1.5) +
+  scale_fill_manual(values = col_vector) +
+  scale_color_manual(values = col_vector) +
+  labs(
+    color = "Shoretype",
+    fill = "Shoretype"
+  ) +
+  coord_sf(xlim = c(-125, -122), ylim = c(46, 49.5), expand = FALSE) 
+
+```
+
+```{r, fig.height=6, fig.width=4}
+wa_colors <- c(channel, gravel_beach, mud_flat, man_made, bluff_cliff, estuary, sand_beach, mixed_grain)
+plot_percent_cover(wa_shore_simp, wa_colors, upp_lim = 50)
+```
+
+
+# wa outer coast
+```{r}
+# color organization
+wa_outer_levels <- c("Human influenced", "Bluff/cliff", "Mixed grain size beach",
+                     "Sand beach")
+
+wa_outer_colors <- c(man_made, bluff_cliff, mixed_grain, sand_beach)
+
+```
+
+
+```{r}
+# crop shoretype data to just washington outer coast
+wa_outer <- st_intersection(wa_shore_simp, wa_shore_union)
+
+# get just the makah area
+ps_line <- st_transform(puget_sound_shoretype, st_crs(wa_shore_simp))
+makah_area_ps <- st_crop(ps_line, c(xmin = -125, ymin = 48, xmax = -123.6, ymax = 48.5)) %>% 
+  st_buffer(0.01)
+makah_area_wa <- st_crop(wa_shore_simp, c(xmin = -125, ymin = 48, xmax = -123.6, ymax = 48.5))  
+makah_area <- st_difference(st_union(makah_area_wa), st_union(makah_area_ps))
+maka_wa_ou <- st_crop(wa_outer, c(xmin = -125, ymin = 48, xmax = -123.6, ymax = 48.5)) 
+  
+makah_just <- st_difference(makah_area, st_union(maka_wa_ou))
+makah_just_crop <- st_crop(makah_just, c(xmin = -125, ymin = 48.3, xmax = -123.6, ymax = 48.5)) %>% 
+  st_as_sf()
+maka_shoretype <- st_intersection(makah_just_crop, wa_shore_simp)
+
+makah_objects <- maka_shoretype$OBJECTID
+
+maka_wa_shore <- wa_shore_simp %>% 
+  filter(OBJECTID %in% makah_objects)
+
+# final washington outer
+wa_outer <- rbind(wa_outer, maka_wa_shore) %>% 
+  filter(simple_name != "Estuary wetland") %>% 
+  mutate(simple_name = fct_relevel(simple_name, wa_outer_levels))
+
+
+# Map it
+wa_outer_shore <- base_map +
+  geom_sf(data = wa_outer, aes(color = fct_relevel(simple_name, rev(wa_outer_levels)),
+                               fill = fct_relevel(simple_name, rev(wa_outer_levels))), size = 1.5) +
+  scale_fill_manual(values = rev(wa_outer_colors)) +
+  scale_color_manual(values = rev(wa_outer_colors)) +
+  annotation_scale(location = "bl", aes(unit_category = "imperial")) +
+  geom_text_repel(data = wa_outer_places, 
+                   aes(x = latitude, y = longitude, label = name), size = 4,
+                  nudge_x = ifelse(wa_outer_places$name %in% c("La Push", "Point Grenville", "Neah Bay"), 0.2, 0),
+                  nudge_y = ifelse(wa_outer_places$name %in% c("Neah Bay"), -0.15, 0)) +
+  geom_point(data = wa_outer_places, aes(x = latitude, y = longitude)) +
+  geom_text_repel(data = wa_inlets, 
+                   aes(x = latitude, y = longitude, label = name), 
+                  color = "#2E75B6", size = 3, fontface = "italic",
+                  nudge_x = 0.165,
+                  nudge_y = ifelse(wa_inlets$name %in% c("Grays Harbor", "Columbia River"), 0.125, 0),
+                  min.segment.length = 0) +
+  labs(
+    color = "Shoretype",
+    fill = "Shoretype"
+  ) +
+annotate(geom = "text", 
+                                 x = -124.6, y = 47, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45)  +
+  scale_x_continuous(breaks = seq(-125, -123.4, by = 0.5)) +
+  coord_sf(xlim = c(-125, -123.35), ylim = c(46, 48.45), expand = FALSE) 
+
+# save the map
+ggsave(filename = "wa_outer_shoretype.png", plot = wa_outer_shore, path = here("Output/Maps/"), dpi = 350)
+
+```
+
+```{r, fig.height=6, fig.width=4}
+
+# graph wa outer coast percentage of shoreline
+plot_percent_cover(wa_outer, wa_outer_colors, upp_lim = 60)
+```
+
+
+# Puget Sound
+
+```{r}
+# color organization
+puget_colors <- c(channel, gravel_beach, mud_flat, man_made, bluff_cliff, estuary, sand_beach, mixed_grain)
+ps_levels <-c("Channel", "Gravel beach", "Mud flat", "Human influenced","Bluff/cliff", "Estuary wetland", "Sand beach", "Mixed grain size beach")
+```
+
+
+```{r}
+# simplify the classification names
+puget_sound_shoretype_simp <- puget_sound_shoretype %>% 
+  mutate(simple_name = case_when(
+    REP_NAME == "Sand and gravel beach" ~ "Mixed grain size beach",
+    REP_NAME == "Sand and gravel flat" ~ "Mixed grain size beach",
+    REP_NAME == "Rock with sand and gravel beach" ~ "Mixed grain size beach",
+    REP_NAME == "Rock with gravel beach" ~ "Mixed grain size beach",
+    REP_NAME == "Rock with sand beach" ~ "Mixed grain size beach",
+    REP_NAME == "Sand flat" ~ "Sand beach",
+    REP_NAME == "Gravel flat" ~ "Sand beach",
+    REP_NAME == "Rock cliff" ~ "Bluff/cliff",
+    REP_NAME == "Rock platform" ~ "Bluff/cliff",
+    REP_NAME == "Man-made" ~ "Human influenced",
+    TRUE ~ REP_NAME
+  )) %>% 
+  mutate(simple_name = fct_relevel(simple_name, ps_levels))
+
+# plot shore type
+ps_shore_plot <- base_map +
+  geom_sf(data = puget_sound_shoretype_simp, aes(color = fct_relevel(simple_name, rev(ps_levels)), fill = fct_relevel(simple_name, rev(ps_levels))), size = 1.5) +
+  geom_sf(data = salish_places, color = "black", size = 1.5) +
+   geom_text_repel(data = salish_places, 
+                   aes(x = latitude, y = longitude, label = name),
+                   nudge_x = ifelse(salish_places$name %in% c("Tacoma", "Bellingham", "Seattle", "Point Grenville"), 0.1, 0),
+                   nudge_y = ifelse(salish_places$name %in% c("Port Angeles"), -0.05, 0)) +
+  geom_point(data = salish_places, aes(x = latitude, y = longitude)) +
+   scale_fill_manual(values = rev(puget_colors)) +
+   scale_color_manual(values = rev(puget_colors)) +
+  annotate(geom = "text", 
+                                 x = -124.7, y = 47.3, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45)  +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  labs(
+    color = "Shoretype",
+    fill = "Shoretype"
+  ) +
+  coord_sf(xlim = c(-125, -121.9), ylim = c(46.95, 49.1), expand = FALSE) 
+
+# save the map
+ggsave(filename = "salish_sea_shoretype.png", plot = ps_shore_plot, path = here("Output/Maps/"), dpi = 350)
+
+```
+
+```{r}
+# place names test
+base_map +
+  geom_text(data = wa_places, 
+                  aes(x = latitude, y = longitude, label = name))
+  geom_text_repel(data = wa_places, 
+                  aes(x = latitude, y = longitude, label = name), 
+                  min.segment.length = 0, box.padding = 0.5,
+                  nudge_x = ifelse(wa_places$name %in% c("Seattle", "Tacoma"), 0.5,0),
+                  nudge_y = ifelse(wa_places$name %in% c("San Juan Islands"), -0.2,0)) +
+  coord_sf(xlim = c(-125, -121.9), ylim = c(47, 49.1), expand = FALSE) 
+
+```
+
+
+```{r, fig.height=6, fig.width=4}
+# graph wa outer coast percentage of shoreline
+
+# calculate length of shoreline
+ps_outer_length <- puget_sound_shoretype %>% 
+  summarize(geometry = st_union(geometry)) %>% 
+  st_length()
+
+# calculate percent of shoreline of each type
+ps_percent <- puget_sound_shoretype_simp %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  group_by(simple_name) %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(percent_shore = as.numeric((length/ps_outer_length)*100)) %>% 
+  mutate(simple_name = fct_relevel(simple_name, ps_levels))
+
+# plot
+ggplot(ps_percent, aes(x = simple_name, y = percent_shore)) +
+  geom_col(aes(fill = simple_name), show.legend = FALSE) +
+  scale_fill_manual(values = puget_colors) +
+  coord_flip() +
+  labs(
+    x = "Shoreline Type",
+    y = "Percent of Shoreline"
+  ) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,50)) +
+  scale_x_discrete(expand = c(0,0)) +
+  theme_bw() +
+  theme(plot.margin = margin(t = 10, r = 10, b = 10, l = 10))
+
+```
+
+# Oregon
+
+```{r}
+# oregon coastal cities
+
+or_coast_towns <- data.frame(name = c("Coos Bay", "Brookings", "Tillamook", "Newport"), 
+                        longitude = c(43.41, 42.13, 45.46, 44.66), latitude = c(-124.2, -124.23, -123.85, -124.08)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+  
+ 
+```
+
+
+```{r}
+or_all_levels <- c("Gravel beach", "Mudflat", "Human influenced","Mixed grain size beach", "Bluff/cliff", "Sand beach", "Estuary wetland")
+or_all_colors <- c(gravel_beach, mud_flat, man_made, mixed_grain, bluff_cliff, sand_beach, estuary)
+```
+
+
+```{r, fig.height=6, fig.width=4}
+# clean up the shoretype names
+or_shoretype_simpl <- or_shoretype %>% 
+  mutate(Shore_Type_Name = str_remove(Shore_Type_Name, ", wide")) %>% 
+  mutate(Shore_Type_Name = str_remove(Shore_Type_Name, ", narrow")) %>% 
+  mutate(Shore_Type_Name = str_remove(Shore_Type_Name, ", impermeable")) %>% 
+  mutate(Shore_Type_Name = str_remove(Shore_Type_Name, ", permeable")) %>% 
+  mutate(simple_name = case_when(
+    
+    Shore_Type_Name == "Gravel flat" ~ "Gravel beach",
+    Shore_Type_Name == "Sand flat" ~ "Sand beach",
+    Shore_Type_Name == "Sand & gravel beach" ~ "Mixed grain size beach",
+    Shore_Type_Name == "Sand & gravel flat or fan" ~ "Mixed grain size beach",
+    Shore_Type_Name == "Cliff with gravel beach" ~ "Gravel beach",
+    Shore_Type_Name == "Cliff with gravel/sand beach" ~ "Mixed grain size beach",
+    Shore_Type_Name == "Cliff with sand beach" ~ "Sand beach",
+    Shore_Type_Name == "Platform with G&S beach" ~ "Mixed grain size beach",
+    Shore_Type_Name == "Platform with gravel beach" ~ "Gravel beach",
+    Shore_Type_Name == "Platform with sand beach" ~ "Sand beach",
+    Shore_Type_Name == "Ramp with gravel/sand beach" ~ "Mixed grain size beach",
+    Shore_Type_Name == "Ramp w gravel & sand beach" ~ "Mixed grain size beach",
+    Shore_Type_Name == "Ramp with gravel beach" ~ "Gravel beach",
+    Shore_Type_Name == "Ramp with sand beach" ~ "Sand beach",
+    Shore_Type_Name == "Rock Ramp" ~ "Bluff/cliff",
+    Shore_Type_Name == "Rock Platform" ~ "Bluff/cliff",
+    Shore_Type_Name == "Rock Cliff" ~ "Bluff/cliff",
+    Shore_Type_Name == "Estuaries" ~ "Estuary wetland",
+    Shore_Type_Name == "Man-made" ~ "Human influenced",
+    TRUE ~ Shore_Type_Name
+    
+  )) %>% 
+  filter(!is.na(Shore_Type_Name))
+
+plot_percent_cover(or_shoretype_simpl, or_all_colors, upp_lim = 50)
+```
+
+```{r}
+or_levels <- c("Mudflat", "Human influenced",  "Gravel beach", "Mixed grain size beach", "Bluff/cliff", "Sand beach")
+or_colors <- c(mud_flat, man_made,  gravel_beach, mixed_grain, bluff_cliff, sand_beach)
+```
+
+
+```{r}
+
+or_shoretype_simpl_crs <- st_transform(or_shoretype_simpl, st_crs(or_shore_buffer))
+or_outer_shore <- st_intersection(or_shoretype_simpl_crs, or_shore_buffer) %>% 
+  mutate(simple_name = fct_relevel(simple_name, rev(or_levels))) %>% 
+  filter(simple_name != "Estuary wetland")
+
+base_map +
+  geom_sf(data = or_outer_shore, aes(color = simple_name, fill = simple_name), size = 1.5, show.legend = FALSE) +
+  scale_fill_manual(values = rev(or_colors)) +
+   scale_color_manual(values = rev(or_colors)) +
+  geom_text_repel(data = or_coast_towns, 
+                  aes(x = latitude, y = longitude, label = name), 
+                  min.segment.length = 0, nudge_x = 0.1) +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  labs(
+    color = "Shoretype",
+    fill = "Shoretype"
+  )  +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.25), expand = FALSE) 
+```
+
+
+```{r, fig.height=6, fig.width=4}
+or_outer_shore_length <- or_outer_shore %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(length = as.numeric(length))
+
+# calculate percent of shoreline of each type
+or_percent <- or_outer_shore %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  group_by(simple_name) %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(percent_shore = as.numeric((length/or_outer_shore_length$length)*100)) 
+
+# plot
+ggplot(or_percent, aes(x = fct_reorder(simple_name, percent_shore), y = percent_shore)) +
+  geom_col(aes(fill = simple_name), show.legend = FALSE) +
+  scale_fill_manual(values = rev(or_colors)) +
+  coord_flip() +
+  labs(
+    x = "Shoreline Type",
+    y = "Percent of Shoreline"
+  ) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,60)) +
+  scale_x_discrete(expand = c(0,0)) +
+  theme_bw() +
+  theme(plot.margin = margin(t = 10, r = 10, b = 10, l = 10))
+
+```
+
+# Estuaries
+
+## Coos bay
+
+```{r}
+coos_colors <- c(bluff_cliff,gravel_beach,man_made,mixed_grain,  sand_beach, mud_flat,  estuary)
+coos_order <- c("Bluff/cliff", "Gravel beach", "Man-made", "Mixed grain size beach", "Sand beach", "Mudflat", "Estuary wetland")
+```
+
+
+```{r}
+# coos bay
+coos_bay_shp <- pnw_estuaries %>% 
+  filter(Estuary_Name == "Coos Bay")
+
+coos_bay_buffer <- st_transform(coos_bay_shp, st_crs(or_shoretype_simpl_crs))
+coos_bay_buffer <- st_buffer(coos_bay_buffer, 0.001)
+
+coos_bay_shoretype <- st_intersection(or_shoretype_simpl_crs, coos_bay_buffer) %>% 
+  mutate(simple_name = fct_relevel(simple_name, coos_order))
+
+coos_bay_shp_simp <- ms_simplify(coos_bay_shp) 
+
+base_map +
+  geom_sf(data = coos_bay_shp_simp, fill = "#e1e9f6", size = 0.5) +
+  geom_sf(data = coos_bay_shoretype, aes(color = simple_name, fill = simple_name), size = 1.1) +
+  scale_fill_manual(values = coos_colors) +
+   scale_color_manual(values = coos_colors) +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  labs(
+    color = "Shoretype",
+    fill = "Shoretype"
+  )  +
+  coord_sf(xlim = c(-124.6, -123.9), ylim = c(43.2, 43.55), expand = FALSE) 
+
+```
+
+```{r, fig.height=6, fig.width=4}
+coos_shore_length <- coos_bay_shoretype %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(length = as.numeric(length))
+
+# calculate percent of shoreline of each type
+coos_percent <- coos_bay_shoretype %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  group_by(simple_name) %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(percent_shore = as.numeric((length/coos_shore_length$length)*100)) 
+
+# plot
+ggplot(coos_percent, aes(x = fct_reorder(simple_name, percent_shore), y = percent_shore)) +
+  geom_col(aes(fill = simple_name), show.legend = FALSE) +
+  scale_fill_manual(values = coos_colors) +
+  coord_flip() +
+  labs(
+    x = "Shoreline Type",
+    y = "Percent of Shoreline"
+  ) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+  scale_x_discrete(expand = c(0,0)) +
+  theme_bw() +
+  theme(plot.margin = margin(t = 10, r = 10, b = 10, l = 10))
+```
+## Willapa
+
+```{r}
+wb_colors <- c(mud_flat, mixed_grain, man_made, bluff_cliff, sand_beach, estuary)
+wb_order <- c("Mud flat", "Mixed grain size beach", "Man-made", "Bluff/cliff", "Sand beach", "Estuary wetland")
+```
+
+
+```{r}
+#willapa bay
+wb_shp <- pnw_estuaries %>% 
+  filter(Estuary_Name == "Willapa Bay")
+
+wb_buffer <- st_transform(wb_shp, st_crs(wa_shore_simp))
+wb_buffer <- st_buffer(wb_buffer, 0.001)
+
+wb_shoretype <- st_intersection(wa_shore_simp, wb_buffer) %>% 
+  mutate(simple_name = fct_relevel(simple_name, wb_order))
+
+base_map +
+  geom_sf(data = wb_shoretype, aes(color = simple_name, fill = simple_name), size = 1.5) +
+  scale_fill_manual(values = wb_colors) +
+   scale_color_manual(values = wb_colors) +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  labs(
+    color = "Shoretype",
+    fill = "Shoretype"
+  )  +
+  coord_sf(xlim = c(-124.2, -123.7), ylim = c(46.3, 46.8), expand = FALSE) 
+```
+
+```{r, fig.height=6, fig.width=4}
+wb_shore_length <- wb_shoretype %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(length = as.numeric(length))
+
+# calculate percent of shoreline of each type
+wb_percent <- wb_shoretype %>% 
+  mutate(length = st_length(geometry)) %>% 
+  st_drop_geometry() %>% 
+  group_by(simple_name) %>% 
+  summarize(length = sum(length)) %>% 
+  mutate(percent_shore = as.numeric((length/wb_shore_length$length)*100)) 
+
+# plot
+ggplot(wb_percent, aes(x = fct_reorder(simple_name, percent_shore), y = percent_shore)) +
+  geom_col(aes(fill = simple_name), show.legend = FALSE) +
+  scale_fill_manual(values = wb_colors) +
+  coord_flip() +
+  labs(
+    x = "Shoreline Type",
+    y = "Percent of Shoreline"
+  ) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+  scale_x_discrete(expand = c(0,0)) +
+  theme_bw() +
+  theme(plot.margin = margin(t = 10, r = 10, b = 10, l = 10))
+```

@@ -1,0 +1,44 @@
+---
+title: "Modified Shoreline"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# load packages
+library(tidyverse)
+library(sf)
+library(tigris)
+library(here)
+library(GADMTools)
+```
+
+Data from : https://data-wadnr.opendata.arcgis.com/datasets/wadnr::shorezone-inventory-shoreline-modification/about
+
+```{r, include = FALSE}
+### Base map Shapefiles
+# crop extent
+crop_extent <- c(xmin = -126, ymin = 41, xmax = -115, ymax = 50)
+
+# get states file
+states <- states(cb = TRUE)
+states_crop <- st_crop(states,  crop_extent)
+states_simp <- ms_simplify(states_crop)
+
+# canada shapefiles
+canada <- gadm_sf_loadCountries("CAN", level = 0)
+canada_sf <- canada$sf
+canada_crop <- st_crop(canada_sf,  crop_extent)
+canada_simp <- ms_simplify(canada_crop)
+
+```
+
+```{r}
+# shorezone shapefile
+shorezone_mod <- read_sf("../Data/shorezone_modifications/ShoreZone_Inventory_-_Shoreline_modification.shp")
+
+```
+

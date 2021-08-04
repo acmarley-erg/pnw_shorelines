@@ -1,0 +1,143 @@
+---
+title: "Tribal lands"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sf)
+library(tigris)
+library(tidyverse)
+library(GADMTools)
+library(ggrepel)
+library(rnaturalearth)
+library(ggspatial)
+library(RColorBrewer)
+library(here)
+```
+
+```{r}
+
+# crop extent
+pnw_extent <- c(xmin = -126.5, ymin = 41, xmax = -115, ymax = 50)
+pnw_coast_extent <- c(xmin = -126, ymin = 42, xmax = -120, ymax = 50)
+
+# states
+states <- states(cb = TRUE)
+pnw_states <- st_crop(states, pnw_extent)
+
+
+# coastline
+coast <- ne_coastline(scale = "small", returnclass = "sf")
+pnw_coast <- st_crop(coast, pnw_extent)
+pnw_coast_buffer <-  st_buffer(pnw_coast, .2)
+
+# tribal land
+us_tribes <- native_areas(cb = FALSE, year = 2020)
+
+# canada
+canada <- gadm_sf_loadCountries("CAN", level = 0)
+canada_sf <- canada$sf
+canada_sf <- st_transform(canada_sf, st_crs(pnw_states))
+canada_crop <- st_crop(canada_sf,  pnw_extent)
+
+
+
+```
+
+```{r}
+# crop and clean tribal land areas
+pnw_tribes <- us_tribes %>% 
+  st_transform(st_crs(pnw_coast_buffer)) %>% 
+  st_crop(pnw_coast_extent) %>% 
+  mutate(INTPTLAT = as.numeric(INTPTLAT)) %>% 
+  mutate(INTPTLON = as.numeric(INTPTLON)) 
+
+
+# just get coastal tribes
+pnw_coast_tribes <- pnw_tribes[pnw_coast_buffer,] 
+
+ggplot() +
+  geom_sf(data = pnw_states) +
+  geom_sf(data = pnw_coast_tribes, fill = "red") +
+  coord_sf(xlim = c(-126.5, -120.5), ylim = c(42, 49.5), expand = FALSE)
+
+pnw_coast_labels <- pnw_coast_tribes %>% 
+  group_by(NAME) %>% 
+  slice(1)
+
+pnw_tribes_combine <- pnw_coast_tribes %>% 
+  group_by(NAME) %>% 
+  summarize(geometry = st_union(geometry)) 
+```
+
+```{r}
+# color palette
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+  geom_label_repel(data = pnw_coast_labels, aes(x =INTPTLON, y =INTPTLAT, label = NAME), 
+                   min.segment.length = 0, box.padding = 1, max.overlaps = 50,
+                   nudge_y = ifelse(pnw_coast_labels$NAME %in% c("Port Madison", "Tulalip"), 0.05, 0),
+                   fill = alpha(c("white"),0.5)) 
+  
+  
+                   
+```
+
+
+```{r}
+
+coast_tribes_plot <- ggplot() +
+  geom_sf(data = canada_crop, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = pnw_states, fill = "#e2e2e2") +
+  geom_sf(data = pnw_tribes_combine, aes(fill = NAME), color = NA, show.legend = FALSE) +
+  scale_fill_manual(values=col_vector) +
+  geom_sf(data = pnw_states, fill = NA) +
+  coord_sf(xlim = c(-126.5, -119), ylim = c(42, 50), expand = FALSE) +
+  geom_label_repel(data = pnw_coast_labels, aes(x =INTPTLON, y =INTPTLAT, label = NAME), 
+                   min.segment.length = 0, max.overlaps = 50,
+                   fill = alpha(c("white"),0.5), size = 3, box.padding = 0.5,
+                   nudge_x = ifelse(pnw_coast_labels$NAME %in% c("Port Gamble", "Port Madison"), 0.6, 0),
+                   nudge_y = ifelse(pnw_coast_labels$NAME %in% c("Puyallup", "Tulalip"), -0.2, 0)) +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  annotate(geom = "text", 
+                                 x = -125.5, y = 45.2, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+        axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+
+# save the map
+ggsave(filename = "coast_tribes_plot.png", plot = coast_tribes_plot, path = here("Output/Maps/"), dpi = 350)
+```
+
+```{r}
+
+ggplot() +
+  geom_sf(data = canada_crop, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = pnw_states, fill = "#e2e2e2") +
+  geom_sf(data = pnw_coast_buffer, fill = "red", color = "red") +
+  coord_sf(xlim = c(-126.5, -120.5), ylim = c(42, 46), expand = FALSE) +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  annotate(geom = "text", 
+                                 x = -125.5, y = 45.2, 
+                                 label = "PACIFIC OCEAN", 
+                                 fontface = "italic", 
+                                 color = "#2E75B6", 
+                                 size = 3.6,
+                                 angle = 45) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+        axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+```
+

@@ -20,6 +20,8 @@ library(rmapshaper)
 library(ggmap)
 library(ggrepel)
 library(datapasta)
+library(ggspatial)
+library(bnspatial)
 ```
 
 ```{r, include = FALSE}
@@ -81,12 +83,13 @@ short_term_change <- rbind(wa_st_point, or_st_point)
 # PNW littoral cells
 littoral_cells <- read_sf(here("Data/littoral_cells_westcoast_line/littoral_cells_westcoast_line.shp")) %>% 
   filter(State %in% c("Oregon", "Washington"))
+
 littoral_cells <- st_transform(littoral_cells, 4326)
 
 ```
 
-```{r}
-# clean littoral cell names
+```{r, include = FALSE}
+# clean littoral cell names so that they match the Ruggiero et al 2013 report
 littoral_cells <- littoral_cells %>% 
   mutate(name_2013 = case_when(
     str_detect(Cell_Name, "P-1") ~ "Long Beach",
@@ -103,14 +106,26 @@ littoral_cells <- littoral_cells %>%
     
   ))
 
+
 study_cells <- littoral_cells %>% 
   filter(name_2013 != "NA") %>% 
-  select(name_2013)
+  select(name_2013, State) %>% 
+  group_by(name_2013) %>% 
+  summarize(geometry = st_union(geometry))
+
+lit_cell_join <- as.data.frame(littoral_cells) %>% 
+  select(name_2013, State) %>% 
+  filter(name_2013 != "NA") %>% 
+  distinct()
+
+study_cells <- left_join(study_cells, lit_cell_join, by = "name_2013")
 
 ```
 
 
 ```{r}
+
+# copy-paste of long and short term change in ruggiero et al 2013 tables
 
 # messy Oregon long term change paste
 oregon_lt_mess <- data.frame(
@@ -207,24 +222,26 @@ wa_st_mess <- data.frame(
 clean_report_rates = function(messy_data){
   
   littoral_cell_names <- messy_data %>% 
-    mutate(name_2013 = ifelse(str_detect(messy, "[a-z]"), messy, "NA")) %>% 
+    mutate(name_2013 = ifelse(str_detect(messy, "[a-z]"), as.character(messy), "NA")) %>% 
     filter(name_2013 != "NA") %>% 
     select(-messy)
 
   rate_changes <- messy_data %>% 
-    mutate(av_rate_change = ifelse(str_detect(messy, "±"), messy, "NA")) %>% 
+    mutate(av_rate_change = ifelse(str_detect(messy, "±"), as.character(messy), "NA")) %>% 
     filter(av_rate_change != "NA") %>% 
     select(-messy) 
   
   clean_df <- cbind(littoral_cell_names, rate_changes) %>% 
-    mutate(LR = str_extract(av_rate_change, "^.*(?=(±))")) %>% 
+    mutate(rate = str_extract(av_rate_change, "^.*(?=(±))")) %>% 
     mutate(error = str_extract(av_rate_change, "(?=(±)).*")) %>% 
     mutate(error = str_remove(error, "±")) %>% 
     mutate(error = as.numeric(error)) %>% 
-    mutate(LR = as.numeric(LR))
+    mutate(rate = as.numeric(rate))
   
   return(clean_df)
 }
+
+
 
 # get rates of change for all of the littoral cells
 or_lt_rates <- clean_report_rates(oregon_lt_mess) 
@@ -242,21 +259,71 @@ pnw_st <- rbind(or_st_rates, wa_st_rates)
 
 
 ```{r, include = FALSE}
+
+# palette for maps
+div_palette <- c("#08519c", "#3182bd", "#6baed6", "#bdd7e7", "#eff3ff", "#a3a3a3", "#f2e2aa", "#FEB24C")
+
+div_palette <- c("#08519c", "#3182bd", "#6baed6", "#9cd8e8", "#c8ebf5", "#a3a3a3",  "#f2e2aa", "#fdae61", "#e0f3f8", "#fffdbf")
+
+
 # base map
 base_map <- ggplot() +
   geom_sf(data = canada_simp, fill = "#e2e2e2", color = "#a3a3a3") +
-  geom_sf(data = states_simp, fill = "#e2e2e2") 
+  geom_sf(data = states_crop, fill = "#e2e2e2") +
+  annotation_scale(location = "br", aes(unit_category = "imperial")) +
+  #  annotate(geom = "text", 
+  #                        x = -122, y = 46.6, 
+  #                        label = "WASHINGTON", 
+  #                        color = "black", 
+  #                        size = 4.3) +
+  # annotate(geom = "text", 
+  #                        x = -122, y = 44, 
+  #                        label = "OREGON", 
+  #                        color = "black", 
+  #                        size = 4.3) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank())
 
 ```
 
 
+```{r, include = FALSE}
+# PNW littoral cell labels
+
+# find center of line to plot labels
+pnw_lit_cell_labels <- st_centroid(study_cells)
+pnw_lit_cell_labels <- pnw_lit_cell_labels %>% 
+   mutate(lat = unlist(map(pnw_lit_cell_labels$geometry,1)),
+           long = unlist(map(pnw_lit_cell_labels$geometry,2)))
+
+```
+
+
+
 ## Washington Littoral Cells
 
-```{r, echo = FALSE}
+```{r}
+# WA points of reference
 
-# Point Grenville for reference 
+# Point Grenville 
 point_grenville <- data.frame(name = "Point Grenville", longitude = -124.28, latitude = 47.3) %>% 
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+# Cape Shoalwater
+cape_shoalwater <- data.frame(name = "Cape Shoalwater", longitude = -124.09, latitude = 46.75) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+# Ledbetter Point
+ledbetter_point <- data.frame(name = "Ledbetter Point", longitude = -124.06, latitude = 46.66) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+
+```
+
+
+```{r, echo = FALSE}
 
 # change names to match 2013 report
 wa_lit_cell <- study_cells %>% 
@@ -282,38 +349,68 @@ base_map +
 or_lit_cell <- study_cells %>% 
   filter(State == "Oregon") 
 
-or_lit_cell_labels <- st_centroid(or_lit_cell)
-or_lit_cell_labels <- or_lit_cell_labels %>% 
-   mutate(lat = unlist(map(or_lit_cell_labels$geometry,1)),
-           long = unlist(map(or_lit_cell_labels$geometry,2)))
+or_labels <- pnw_lit_cell_labels %>% 
+  filter(State == "Oregon")
 
+# plot oregon littoral cells
 base_map +
   geom_sf(data = or_lit_cell, size = 2, aes(color = name_2013), show.legend = FALSE) +
-  geom_text_repel(data = or_lit_cell_labels, 
+  geom_text_repel(data = or_labels, 
                   aes(x = lat, y = long, label = name_2013), 
                   min.segment.length = 0, box.padding = 0.5,
                   nudge_x = ifelse(or_lit_cell_labels$name_2013 == "Clatsop Plains (CRLC)", -1, 0)) +
   labs(
     title = "Oregon Littoral Cells"
   ) +
-  coord_sf(xlim = c(-126, -122), ylim = c(42, 46.5), expand = FALSE) +
-  theme_bw() 
+  coord_sf(xlim = c(-126, -122), ylim = c(42, 46.5), expand = FALSE)
 ```
+
 
 ## PNW long term change littoral cells
 
-```{r, echo =}
+```{r, echo = FALSE}
 
-pnw_long <- st_as_sf(left_join(pnw_lt, study_cells, by = "name_2013"))
+# combine long term change rates with the littoral cell shapefiles
+pnw_long <- st_as_sf(left_join(pnw_lt, study_cells, by = "name_2013")) 
 
-limits = c(-1, 1) * max(abs(pnw_long$LR))
+# buffer 
+pnw_long_buffer <- st_buffer(pnw_long, 0.03)
 
-base_map +
-  geom_sf(data = pnw_long, size = 2, aes(color = LR)) +
-  scale_colour_distiller(type = "div", limits = limits, palette = "RdYlBu", direction = 1) +
-  coord_sf(xlim = c(-125, -122), ylim = c(42, 47.4), expand = FALSE) +
-  theme_bw() +
-  theme(legend.key.height=unit(1, "cm"))
+# make bins for coloring 
+pnw_long_buffer <- pnw_long_buffer %>% 
+  mutate(bins = case_when(
+    rate < -4 & rate >= -5 ~ "-4 to -5",
+    rate < -3 & rate >= -4 ~ "-3 to -4",
+    rate < -2 & rate >= -3 ~ "-2 to -3",
+    rate < -1 & rate >= -2 ~ "-1 to -2",
+    rate < 0 & rate >= -1 ~ "0 to -1",
+    rate == 0 ~ "0",
+    rate < 1 & rate > 0 ~ "0 to 1",
+    rate < 2 & rate >= 1 ~ "1 to 2",
+    rate < 3 & rate >= 2 ~ "2 to 3",
+    rate < 4 & rate >= 3 ~ "3 to 4",
+    rate < 5 & rate >= 4 ~ "4 to 5",
+  )) %>% 
+  mutate(bins = factor(bins, c("4 to 5", "3 to 4", "2 to 3", "1 to 2", "0 to 1", "0", "0 to -1", "-1 to -2", "-2 to -3", "-3 to -4", "-4 to -5")))
+
+
+# bin plot
+
+div_palette <- c("#004c6d", "#007599", "#00a1c1", "#00cfe3", "#00FDF8", "#a3a3a3",  "#f0ff00", "#FFBA06", "#FD6104", "#DD0103", "#8D0300")
+
+pnw_long_littoral_plot <- base_map +
+  geom_sf(data = pnw_long_buffer, aes(fill = bins)) +
+  geom_text_repel(data = pnw_lit_cell_labels, 
+                  aes(x = lat, y = long, label = name_2013), 
+                  min.segment.length = 0, box.padding = 1) +
+  scale_fill_manual(values = div_palette, drop = FALSE) +
+  coord_sf(xlim = c(-126.5, -121), ylim = c(42, 47.4), expand = FALSE) +
+  labs(
+    fill = "Average Shoreline\nChange Rate (m/yr)"
+  ) 
+    
+ggsave(filename = "pnw_lit_long.png", plot = pnw_long_littoral_plot, path = here("Output/Maps/"), dpi = 350)
+
 
 ```
 
@@ -323,19 +420,88 @@ base_map +
 
 pnw_short <- st_as_sf(left_join(pnw_st, study_cells, by = "name_2013"))
 
-limits = c(-1, 1) * max(abs(pnw_short$LR))
+# buffer 
+pnw_short_buffer <- st_buffer(pnw_short, 0.03)
 
-base_map +
-  geom_sf(data = pnw_short, size = 2, aes(color = LR)) +
-  scale_colour_distiller(type = "div", limits = limits, palette = "RdYlBu", direction = 1) +
-  coord_sf(xlim = c(-125, -122), ylim = c(42, 47.4), expand = FALSE) +
-  theme_bw() +
-  theme(legend.key.height=unit(1, "cm"))
+# make bins for coloring 
+pnw_short_buffer <- pnw_short_buffer %>% 
+  mutate(bins = case_when(
+    rate < -4 & rate >= -5 ~ "-4 to -5",
+    rate < -3 & rate >= -4 ~ "-3 to -4",
+    rate < -2 & rate >= -3 ~ "-2 to -3",
+    rate < -1 & rate >= -2 ~ "-1 to -2",
+    rate < 0 & rate >= -1 ~ "0 to -1",
+    rate == 0 ~ "0",
+    rate < 1 & rate > 0 ~ "0 to 1",
+    rate < 2 & rate >= 1 ~ "1 to 2",
+    rate < 3 & rate >= 2 ~ "2 to 3",
+    rate < 4 & rate >= 3 ~ "3 to 4",
+    rate < 5 & rate >= 4 ~ "4 to 5",
+  )) %>% 
+  mutate(bins = factor(bins, c("4 to 5", "3 to 4", "2 to 3", "1 to 2", "0 to 1", "0", "0 to -1", "-1 to -2", "-2 to -3","-3 to -4","-4 to -5")))
+
+# plot bins
+
+pnw_short_littoral_plot <- base_map +
+  geom_sf(data = pnw_short_buffer, aes(fill = bins)) +
+  geom_text_repel(data = pnw_lit_cell_labels, 
+                  aes(x = lat, y = long, label = name_2013), 
+                  min.segment.length = 0, box.padding = 1) +
+  scale_fill_manual(values = div_palette, drop = FALSE) +
+  coord_sf(xlim = c(-126.5, -121), ylim = c(42, 47.4), expand = FALSE) +
+  labs(
+    fill = "Average Shoreline\nChange Rate (m/yr)"
+  ) 
+
+ggsave(filename = "pnw_lit_short.png", plot = pnw_short_littoral_plot, path = here("Output/Maps/"), dpi = 350)
 
 ```
 
 
 # Washington
+
+```{r, include = FALSE}
+
+#create pints for the inlets
+
+wa_inlets <- data.frame(name = c("Grays Harbor", "Willapa Bay", "Columbia River"), 
+                        longitude = c(46.95, 46.6, 46.2), latitude = c(-124, -124, -123.8)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE) 
+
+
+# aoi
+wa_aoi <- aoi(states_simp, bbox = c(-124.5, -123.4, 46, 47.4))
+wa_box <- st_as_sf(st_as_sfc(st_bbox(wa_aoi), crs = 4326))
+
+or_aoi <- aoi(states_simp, bbox = c(-125, -122.5, 42, 46.5))
+or_box <- st_as_sf(st_as_sfc(st_bbox(or_aoi), crs = 4326))
+
+
+
+# aoi map
+ggplot() +
+  geom_sf(data = canada_simp, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = states_simp, fill = "#e2e2e2") +
+  geom_sf(data = or_box, fill = NA, color = "red", size = 1.5) +
+   annotate(geom = "text", 
+                         x = -121, y = 46.6, 
+                         label = "WASHINGTON", 
+                         color = "black", 
+                         size = 4.3) +
+  annotate(geom = "text", 
+                         x = -121, y = 44, 
+                         label = "OREGON", 
+                         color = "black", 
+                         size = 4.3) +
+    coord_sf(xlim = c(-126, -117), ylim = c(41.8, 49), expand = FALSE) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+
+
+```
+
 
 ## Long term change transects
 
@@ -368,41 +534,56 @@ wa_lt_greater <- wa_lt_greater %>%
   mutate(bins = factor(bins, c("> 20", "10 to 20", "5 to 10", "0 to 5", "-5 to 0", "-10 to -5", "-20 to -10", "< -20")))
   
 
+div_palette <- c("#004c6d", "#007599", "#00a1c1", "#00cfe3", "#00FDF8", "#a3a3a3",  "#f0ff00", "#FFBA06", "#FD6104", "#DD0103", "#8D0300")
+
 # plot
 base_map +
   geom_sf(data = wa_lt_less, color = "dark grey", size = 2) +
   geom_sf(data = wa_lt_greater, aes(color = bins, size = bins)) +
-  scale_color_manual(values = c("#4575b4", "#74add1", "#abd9e9", "#e0f3f8", "#fffdbf", "#fdae61", "#f46d43", "#d73027")) +
+  scale_color_manual(values = c("#004c6d", "#007599", "#00c0d8", "#00FDF8", "#f0ff00","#FD6104", "#DD0103", "#8D0300")) +
   scale_size_manual(values = c(5,4,3,2,2,3,4,5)) +
-  coord_sf(xlim = c(-125, -122.5), ylim = c(46, 47.4), expand = FALSE) +
-  theme_bw() +
+  coord_sf(xlim = c(-124.5, -123.4), ylim = c(46, 47.4), expand = FALSE) +
   labs(
-    color = "Long Term \nRate of Change",
-    size = "Long Term \nRate of Change"
-  ) +
-  theme(
-        legend.key.height=unit(1, "cm")
-        )
+    color = "Rate of Change (m/yr)",
+    size = "Rate of Change (m/yr)"
+  )  
 
 # make a map that layers the bigger dots first
 wa_lt_greater_layering <- wa_lt_greater %>% 
   mutate(bins = factor(bins, c("> 20",  "< -20", "10 to 20", "-20 to -10", "5 to 10", "-10 to -5", "0 to 5", "-5 to 0")))
 
-base_map +
+wa_lt_outer_transect_map <- base_map +
   geom_sf(data = wa_lt_less, color = "dark grey", size = 2) +
   geom_sf(data = wa_lt_greater_layering, aes(color = bins, size = bins)) +
-  scale_color_manual(values = c("#4575b4", "#d73027", "#74add1", "#f46d43", "#abd9e9", "#fdae61", "#e0f3f8", "#fffdbf")) +
+  scale_color_manual(values = c("#004c6d", "#8D0300", "#007599", "#DD0103", "#00c0d8", "#FD6104", "#00FDF8", "#f0ff00")) +
   scale_size_manual(values = c(5,5,4,4,3,3,2,2)) +
   coord_sf(xlim = c(-124.5, -123.5), ylim = c(46, 47.4), expand = FALSE) +
-  theme_bw() +
   labs(
-    color = "Long Term \nRate of Change",
-    size = "Long Term \nRate of Change"
+    color = "Rate of Change (m/yr)",
+    size = "Rate of Change (m/yr)"
   ) +
-  theme(
-        legend.key.height=unit(1, "cm")
-        )
+  geom_text_repel(data = point_grenville, aes(x = longitude, y = latitude, label = name), nudge_x = 0.2) +
+  geom_text_repel(data = cape_shoalwater, aes(x = longitude, y = latitude, label = name), nudge_x = 0.25, nudge_y = 0.05) +
+  geom_text_repel(data = ledbetter_point, aes(x = longitude, y = latitude, label = name), nudge_x = 0.3) +
+  annotate(geom = "text", 
+                         x = -124, y = 46.955, 
+                         label = "Grays Harbor", 
+                         color = "#2E75B6", 
+                         size = 3) +
+  annotate(geom = "text", 
+                         x = -123.8, y = 46.23, 
+                         label = "Columbia River", 
+                         color = "#2E75B6", 
+                         size = 3) +
+   annotate(geom = "text", 
+                         x = -123.98, y = 46.58, 
+                         label = "Willapa Bay", 
+                         color = "#2E75B6", 
+                         size = 3,
+                        angle = 270)
 
+# save the map
+ggsave(filename = "wa_lt_outer_transect_map2.png", plot = wa_lt_outer_transect_map, path = here("Output/Maps/"), dpi = 350)
 
 ```
 
@@ -440,17 +621,13 @@ wa_st_greater <- wa_st_greater %>%
 base_map +
   geom_sf(data = wa_st_less, color = "dark grey", size = 2) +
   geom_sf(data = wa_st_greater, aes(color = bins, size = bins)) +
-  scale_color_manual(values = c("#4575b4", "#74add1", "#abd9e9", "#e0f3f8", "#fffdbf", "#fdae61", "#f46d43", "#d73027")) +
+  scale_color_manual(values = c("#004c6d", "#007599", "#00c0d8", "#00FDF8", "#f0ff00","#FD6104", "#DD0103", "#8D0300")) +
   scale_size_manual(values = c(5,4,3,2,2,3,4,5)) +
   coord_sf(xlim = c(-125, -122.5), ylim = c(46, 47.4), expand = FALSE) +
-  theme_bw() +
   labs(
-    color = "Short Term \nRate of Change",
-    size = "Short Term \nRate of Change"
-  ) +
-  theme(
-        legend.key.height=unit(1, "cm")
-        )
+    color = "Rate of Change (m/yr)",
+    size = "Rate of Change (m/yr)"
+  ) 
 
 # make a map that layers the bigger dots first
 wa_st_greater_layering <- wa_st_greater %>% 
@@ -459,22 +636,48 @@ wa_st_greater_layering <- wa_st_greater %>%
 base_map +
   geom_sf(data = wa_st_less, color = "dark grey", size = 2) +
   geom_sf(data = wa_st_greater_layering, aes(color = bins, size = bins)) +
-  scale_color_manual(values = c("#4575b4", "#d73027", "#74add1", "#f46d43", "#abd9e9", "#fdae61", "#e0f3f8", "#fffdbf")) +
+  scale_color_manual(values = c("#004c6d", "#8D0300", "#007599", "#DD0103", "#00c0d8", "#FD6104", "#00FDF8", "#f0ff00")) +
   scale_size_manual(values = c(5,5,4,4,3,3,2,2)) +
   coord_sf(xlim = c(-124.5, -123.5), ylim = c(46, 47.4), expand = FALSE) +
-  theme_bw() +
   labs(
-    color = "Short Term \nRate of Change",
-    size = "Short Term \nRate of Change"
+    color = "Short Term \nRate of Change (m/yr)",
+    size = "Short Term \nRate of Change (m/yr)"
   ) +
-  theme(
-        legend.key.height=unit(1, "cm")
-        )
+  geom_text_repel(data = point_grenville, aes(x = longitude, y = latitude, label = name), nudge_x = 0.2) +
+  geom_text_repel(data = cape_shoalwater, aes(x = longitude, y = latitude, label = name), nudge_x = 0.25, nudge_y = 0.05) +
+  geom_text_repel(data = ledbetter_point, aes(x = longitude, y = latitude, label = name), nudge_x = 0.3) +
+  annotate(geom = "text", 
+                         x = -124, y = 46.955, 
+                         label = "Grays Harbor", 
+                         color = "#2E75B6", 
+                         size = 3) +
+  annotate(geom = "text", 
+                         x = -123.8, y = 46.23, 
+                         label = "Columbia River", 
+                         color = "#2E75B6", 
+                         size = 3) +
+   annotate(geom = "text", 
+                         x = -123.98, y = 46.58, 
+                         label = "Willapa Bay", 
+                         color = "#2E75B6", 
+                         size = 3,
+                        angle = 270)
 
 ```
 
 
 # Oregon
+
+```{r}
+# oregon coastal cities
+
+or_coast_towns <- data.frame(name = c("Coos Bay", "Brookings", "Tillamook", "Newport"), 
+                        longitude = c(43.41, 42.13, 45.46, 44.66), latitude = c(-124.2, -124.23, -123.85, -124.08)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+  
+ 
+```
+
 
 ## Long term change
 
@@ -488,39 +691,76 @@ or_lt_greater <- or_lt %>% filter(error_limit == "greater")
 or_lt_less <- or_lt %>% filter(error_limit == "less")
 
 # look at distribution of values
-# ggplot(or_lt_greater, aes(x = LRR)) +
-#   geom_histogram()
+ ggplot(or_lt_greater, aes(x = LRR)) +
+   geom_histogram()
 
 # add in bins for graphing
 or_lt_greater <- or_lt_greater %>% 
-  mutate(bins = case_when(
-    LRR < -3 ~ "< -3",
-    LRR >= -3 & LRR < 0  ~ "-3 to 0",
-    LRR > 0 & LRR <= 3 ~ "0 to 3",
-    LRR > 3 & LRR <= 5 ~ "3 to 5",
-    LRR > 5 & LRR <= 10 ~ "5 to 10",
-    LRR > 10 & LRR <= 15 ~ "10 to 15",
-    LRR > 15 ~ "> 15",
+ mutate(bins = case_when(
+    LRR < -5 ~ "< -5",
+    LRR >= -5 & LRR < -4 ~ "-4 to -5",
+    LRR >= -4 & LRR < -3 ~ "-3 to -4",
+    LRR >= -3 & LRR < -2 ~ "-2 to -3",
+    LRR >= -2 & LRR < -1 ~ "-1 to -2",
+    LRR >= -1 & LRR < 0  ~ "0 to -1",
+    LRR > 0 & LRR <= 1 ~ "0 to 1",
+    LRR > 1 & LRR <= 2 ~ "1 to 2",
+    LRR > 2 & LRR <= 3 ~ "2 to 3",
+    LRR > 3 & LRR <= 4 ~ "3 to 4",
+    LRR > 4 & LRR <= 5 ~ "4 to 5",
+    LRR > 5 ~ "> 5",
     TRUE ~ "NA"
   )) %>% 
-  mutate(bins = factor(bins, c("> 15", "10 to 15","5 to 10","3 to 5", "0 to 3", "-3 to 0", "< -3")))
-  
-# plot
-base_map +
-  geom_sf(data = or_lt_less, color = "dark grey", size = 2) +
-  geom_sf(data = or_lt_greater, aes(color = bins, size = bins)) +
-  scale_color_manual(values = c("#323695", "#4575b4", "#74add1", "#abd9e9", "#e0f3f8", "#fffdbf")) +
-  scale_size_manual(values = c(5,4,3,2,2,3,4)) +
-  coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.5), expand = FALSE) +
-  theme_bw() +
-  labs(
-    color = "Long Term \nRate of Change",
-    size = "Long Term \nRate of Change"
-  ) +
-  theme(
-        legend.key.height=unit(1, "cm")
-        )
+  mutate(bins = factor(bins, c("> 5", "4 to 5", "3 to 4", "2 to 3", "1 to 2", "0 to 1", "0 to -1", "-1 to -2", "-2 to -3","-3 to -4","-4 to -5","< -5")))
 
+
+or_palette <- c("#000031", "#004c6d", "#007599", "#00a1c1", "#00cfe3", "#00FDF8", "#f0ff00", "#FFBA06", "#FD6104", "#DD0103", "#8D0300",  "#620117")
+
+# plot
+or_leg <- base_map +
+  geom_sf(data = or_lt_less, color = "dark grey", size = 1) +
+  geom_sf(data = or_lt_greater, aes(color = bins, size = bins)) +
+  geom_text_repel(data = or_coast_towns, 
+                  aes(x = latitude, y = longitude, label = name), 
+                  min.segment.length = 0, nudge_x = 0.5,
+                  nudge_y = ifelse(or_coast_towns$name == "Brookings", 0.3, 0)) +
+  scale_color_manual(values = or_palette, drop = FALSE) +
+  scale_size_manual(values = c(6,5,4,3,2,1,1,2,3,4,5,6), drop = FALSE) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.5), expand = FALSE) +
+  labs(
+    color = "Rate of Change (m/yr)",
+    size = "Rate of Change (m/yr)"
+  ) 
+
+ggsave(filename = "or_outer_transect_map_legend.png", plot = or_leg, path = here("Output/Maps/"), dpi = 350)
+
+or_lt_greater_layering <- or_lt_greater %>% 
+  mutate(bins = factor(bins, c("> 5", "< -5", "4 to 5", "-4 to -5", "3 to 4", "-3 to -4", "2 to 3",  "-2 to -3", "1 to 2", "-1 to -2", "0 to 1", "0 to -1")))
+
+or_palette_mixed <- c("#000031", "#620117", "#004c6d", "#8D0300", "#007599", "#DD0103", "#00a1c1","#FD6104", "#00cfe3","#FFBA06",  "#00FDF8", "#f0ff00")
+
+# plot
+or_lt_plot <- base_map +
+  geom_sf(data = or_lt_less, color = "dark grey", size = 2) +
+  geom_sf(data = or_lt_greater_layering, aes(color = bins, size = bins), show.legend = FALSE) +
+  geom_point(data = or_coast_towns, aes(x = latitude, y = longitude), size = 1) +
+  geom_text_repel(data = or_coast_towns, 
+                  aes(x = latitude, y = longitude, label = name), 
+                  nudge_x = 0.5,
+                  nudge_y = ifelse(or_coast_towns$name == "Brookings", 0.3, 0)) +
+  scale_color_manual(values = or_palette_mixed, drop = FALSE) +
+  scale_size_manual(values = c(6,6,5,5,4,4,3,3,2,2,1,1), drop = FALSE) +
+  scale_x_continuous(breaks = seq(-125, -122.5, by = 1)) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.5), expand = FALSE) +
+  labs(
+    color = "Rate of Change (m/yr)",
+    size = "Rate of Change (m/yr)"
+  ) 
+
+
+
+# save the map
+ggsave(filename = "or_lt_outer_transect_map2.png", plot = or_lt_plot, path = here("Output/Maps/"), dpi = 350)
 
 ```
 
@@ -541,36 +781,58 @@ or_st_less <- or_st %>% filter(error_limit == "less")
 
 # add in bins for graphing
 or_st_greater <- or_st_greater %>% 
-  mutate(bins = case_when(
-    EPR < -3 ~ "< -3",
-    EPR >= -3 & EPR < 0  ~ "-3 to 0",
-    EPR > 0 & EPR <= 3 ~ "0 to 3",
-    EPR > 3 & EPR <= 5 ~ "3 to 5",
-    EPR > 5 & EPR <= 10 ~ "5 to 10",
-    EPR > 10 & EPR <= 15 ~ "10 to 15",
-    EPR > 15 & EPR <= 20 ~ "15 to 20",
-    EPR > 20 ~ "> 20",
+ mutate(bins = case_when(
+    EPR < -5 ~ "< -5",
+    EPR >= -5 & EPR < -4 ~ "-4 to -5",
+    EPR >= -4 & EPR < -3 ~ "-3 to -4",
+    EPR >= -3 & EPR < -2 ~ "-2 to -3",
+    EPR >= -2 & EPR < -1 ~ "-1 to -2",
+    EPR >= -1 & EPR < 0  ~ "0 to -1",
+    EPR > 0 & EPR <= 1 ~ "0 to 1",
+    EPR > 1 & EPR <= 2 ~ "1 to 2",
+    EPR > 2 & EPR <= 3 ~ "2 to 3",
+    EPR > 3 & EPR <= 4 ~ "3 to 4",
+    EPR > 4 & EPR <= 5 ~ "4 to 5",
+    EPR > 5 ~ "> 5",
     TRUE ~ "NA"
   )) %>% 
-  mutate(bins = factor(bins, c("> 20", "15 to 20", "10 to 15","5 to 10","3 to 5", "0 to 3", "-3 to 0", "< -3")))
+  mutate(bins = factor(bins, c("> 5", "4 to 5", "3 to 4", "2 to 3", "1 to 2", "0 to 1", "0 to -1", "-1 to -2", "-2 to -3","-3 to -4","-4 to -5","< -5")))
   
 # plot
 base_map +
   geom_sf(data = or_st_less, color = "dark grey", size = 2) +
   geom_sf(data = or_st_greater, aes(color = bins, size = bins)) +
-  scale_color_manual(values = c("#004c6d", "#346888", "#5886a5", "#7aa6c2", "#9dc6e0", "#c1e7ff", "#fffdbf", "#fee090")) +
-  scale_size_manual(values = c(7,6,5,4,3,2,2,3)) +
+  scale_color_manual(values = or_palette, drop = FALSE) +
+  scale_size_manual(values = c(6,5,4,3,2,1,1,2,3,4,5,6), drop = FALSE) +
   coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.5), expand = FALSE) +
-  theme_bw() +
   labs(
     color = "Short Term \nRate of Change",
     size = "Short Term \nRate of Change"
-  ) +
-  theme(
-        legend.key.height=unit(1, "cm")
-        )
+  ) 
 
+or_st_greater_layering <- or_st_greater %>% 
+  mutate(bins = factor(bins, c("> 5", "< -5", "4 to 5", "-4 to -5", "3 to 4", "-3 to -4", "2 to 3",  "-2 to -3", "1 to 2", "-1 to -2", "0 to 1", "0 to -1")))
 
+# plot
+or_st_transect <- base_map +
+  geom_sf(data = or_st_less, color = "dark grey", size = 2) +
+  geom_sf(data = or_st_greater_layering, aes(color = bins, size = bins), show.legend = FALSE) +
+  geom_point(data = or_coast_towns, aes(x = latitude, y = longitude), size = 1) +
+  geom_text_repel(data = or_coast_towns, 
+                  aes(x = latitude, y = longitude, label = name), 
+                  nudge_x = 0.5,
+                  nudge_y = ifelse(or_coast_towns$name == "Brookings", 0.3, 0)) +
+  scale_color_manual(values = or_palette_mixed, drop = FALSE) +
+  scale_size_manual(values = c(6,6,5,5,4,4,3,3,2,2,1,1), drop = FALSE) +
+  coord_sf(xlim = c(-125, -122.5), ylim = c(42, 46.5), expand = FALSE) +
+  scale_x_continuous(breaks = seq(-125, -122.5, by = 1)) +
+  labs(
+    color = "Short Term \nRate of Change",
+    size = "Short Term \nRate of Change"
+  ) 
+
+# save the map
+ggsave(filename = "or_st_outer_transect_map2.png", plot = or_st_transect, path = here("Output/Maps/"), dpi = 350)
 ```
 
 

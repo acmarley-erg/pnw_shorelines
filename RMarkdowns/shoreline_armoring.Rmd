@@ -1,0 +1,126 @@
+---
+title: "Shoreline Armoring"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tigris)
+library(sf)
+library(here)
+library(janitor)
+```
+
+```{r, include = FALSE}
+### Base map Shapefiles
+# crop extent
+crop_extent <- c(xmin = -126, ymin = 41, xmax = -115, ymax = 50)
+
+# get states file
+states <- states(cb = TRUE)
+states_crop <- st_crop(states,  crop_extent)
+
+```
+
+```{r}
+# PNW littoral cells
+littoral_cells <- read_sf(here("Data/littoral_cells_westcoast_line/littoral_cells_westcoast_line.shp")) %>% 
+  filter(State %in% c("Oregon", "Washington")) %>% 
+  st_transform(4326)
+
+# shoreline armoring data
+armoring_all <- read_csv(here("Data/littoral_cell_armoring.csv")) %>% 
+  clean_names() 
+
+armoring_2013_report <- armoring_all %>% 
+  group_by(name_2013) %>% 
+  summarise(armoring_length_ft = sum(armoring_length_ft),
+            cell_length_ft = sum(cell_length_ft))
+```
+
+```{r, include = FALSE}
+# clean littoral cell names so that they match the Ruggiero et al 2013 report
+littoral_cells <- littoral_cells %>% 
+  mutate(name_2013 = case_when(
+    str_detect(Cell_Name, "P-1") ~ "Long Beach",
+    str_detect(Cell_Name, "P-4") ~ "Grayland Plains",
+    str_detect(Cell_Name, "GH-3") ~ "North Beach",
+    Cell_Name == "Elk" ~ "Port Orford",
+    Cell_Name == "Rogue" ~ "Gold Beach",
+    Cell_Name == "Ferrello" ~ "Brookings",
+    Cell_Name == "Clatsop" ~ "Clatsop Plains",
+    Cell_Name == "SandLake" ~ "Sand Lake",
+    Cell_Name == "Cannon" ~ "Cannon Beach",
+    str_detect(Cell_Name, "\\d+") ~ "NA",
+    TRUE ~ Cell_Name
+  )) %>% 
+  filter(name_2013 != "NA") %>% 
+  select(name_2013, State) %>% 
+  group_by(name_2013) %>% 
+  summarize(geometry = st_union(geometry))
+
+
+# littoral cell armoring
+lit_cell_armor <- left_join(littoral_cells, armoring_2013_report, by = "name_2013") %>% 
+  filter(!is.na(armoring_length_ft)) %>% 
+  mutate(percent_armor = (armoring_length_ft/cell_length_ft)*100) %>% 
+  mutate(perc_armor_0_nas = ifelse(percent_armor == 0, NA, percent_armor))
+
+armor_buffer <- st_buffer(lit_cell_armor, 0.03)
+
+```
+
+
+```{r}
+
+# oregon coastal cities
+or_coast_towns <- data.frame(name = c("Coos Bay", "Brookings", "Tillamook", "Newport"), 
+                        longitude = c(43.41, 42.13, 45.46, 44.66), 
+                        latitude = c(-124.2, -124.23, -123.85, -124.08)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+
+# Make a base map
+base_map <- ggplot() +
+  geom_sf(data = canada_crop, fill = "#e2e2e2", color = "#a3a3a3") +
+  geom_sf(data = states_crop, fill = "#e2e2e2") +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = "#e1e9f6"),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank())
+
+# get centroid of littoral cells
+or_lit_cell_centroid <- st_centroid(lit_cell_armor) 
+or_lit_cell_labels <- or_lit_cell_centroid %>% 
+   mutate(lat = unlist(map(or_lit_cell_centroid$geometry,1)),
+           long = unlist(map(or_lit_cell_centroid$geometry,2)))
+```
+
+```{r}
+or_armor <- base_map +
+  geom_sf(data = armor_buffer, aes(fill = perc_armor_0_nas)) +
+    geom_text_repel(data = or_lit_cell_labels, 
+                  aes(x = lat, y = long, label = name_2013), 
+                  min.segment.length = 0, box.padding = 0.7,
+                  max.overlaps = 20,
+                  nudge_x = ifelse(
+                    or_lit_cell_labels$name_2013 %in% c("Clatsop Plains", "Heceta"), -0.6, 
+                    ifelse(or_lit_cell_labels$name_2013 %in% c("Bandon", "Coos"), 0.3, 0 ))) +
+  labs(
+    fill = "Percent of Littoral \nCell Armored"
+  ) +
+  scale_fill_gradient(low = "#ffd8cb", high = "#C00000", na.value = "#a3a3a3",
+                          breaks = c(1, 10, 20,30),
+                          labels = c("> 0%", "10%", "20%", "30%")) +
+ coord_sf(xlim = c(-126, -122), ylim = c(42, 46.5), expand = FALSE)
+
+# save the map
+ggsave(filename = "or_litoral_cell_armoring.png", plot = or_armor, path = here("Output/Maps/"), dpi = 350)
+```
+
+
+
+
